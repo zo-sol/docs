@@ -1,0 +1,504 @@
+---
+title: "डेवलपर दस्तावेज़"
+description: "IQLabs SDK के मुख्य कॉन्सेप्ट और फ़ंक्शन्स"
+---
+
+<Note>
+यह दस्तावेज़ प्रगति में है और इसे परिष्कृत किया जाएगा।
+</Note>
+
+## मुख्य अवधारणाएँ
+
+IQLabs SDK का उपयोग करने से पहले जानने योग्य मुख्य अवधारणाएँ ये हैं।
+
+---
+
+### डेटा स्टोरेज (Code In)
+
+यह वह तरीका है जिससे आप किसी भी डेटा (फाइलें, टेक्स्ट, JSON) को ऑन-चेन स्टोर करते हैं।
+
+#### यह कैसे स्टोर होता है?
+
+डेटा के आकार के अनुसार SDK सबसे उपयुक्त तरीका चुनता है:
+
+- **छोटा डेटा (&lt; 900 bytes)**: तुरंत स्टोर, सबसे तेज
+- **मध्यम डेटा (&lt; 8.5 KB)**: कई ट्रांजैक्शनों में बाँटा जाता है
+- **बड़ा डेटा (&gt;= 8.5 KB)**: गति के लिए समानांतर अपलोड
+
+#### संबंधित प्रमुख फ़ंक्शन्स
+
+- [`codeIn()`](#codein): डेटा अपलोड करें और ट्रांजैक्शन ID प्राप्त करें
+- [`readCodeIn()`](#readcodein): ट्रांजैक्शन ID से डेटा वापस पढ़ें
+
+---
+
+### यूज़र स्टेट PDA
+
+एक उपयोगकर्ता के लिए ऑन-चेन प्रोफ़ाइल अकाउंट।
+
+#### क्या स्टोर होता है?
+
+- प्रोफ़ाइल जानकारी (नाम, प्रोफ़ाइल फोटो, बायो आदि)
+- अपलोड की गई फाइलों की संख्या
+- मित्र अनुरोध रिकॉर्ड
+
+<Note>
+मित्र अनुरोध PDA में वैल्यू के रूप में स्टोर नहीं होते; वे ट्रांजैक्शन के रूप में भेजे जाते हैं।
+</Note>
+
+#### यह कब बनता है?
+
+जब आप पहली बार [`codeIn()`](#codein) कॉल करते हैं तब यह अपने आप बनता है। अतिरिक्त सेटअप की आवश्यकता नहीं है, लेकिन पहले उपयोगकर्ता को दो बार साइन करना पड़ सकता है।
+
+---
+
+### कनेक्शन PDA
+
+दो उपयोगकर्ताओं के बीच संबंध (मित्र, संदेश आदि) प्रबंधित करने वाला ऑन-चेन अकाउंट।
+
+#### इसके कौन-कौन से स्टेट हो सकते हैं?
+
+- **pending**: मित्र अनुरोध भेजा गया है लेकिन अभी स्वीकार नहीं हुआ
+- **approved**: अनुरोध स्वीकार हुआ और उपयोगकर्ता जुड़े हैं
+- **blocked**: एक पक्ष ने दूसरे को ब्लॉक किया
+
+<Warning>
+ब्लॉक किया गया कनेक्शन केवल ब्लॉकर द्वारा ही अनब्लॉक किया जा सकता है।
+</Warning>
+
+#### संबंधित प्रमुख फ़ंक्शन्स
+
+- [`requestConnection()`](#requestconnection): मित्र अनुरोध भेजें (pending बनाता है)
+- [`manageConnection()`](#manageconnection): अनुरोध स्वीकार/अस्वीकार/ब्लॉक/अनब्लॉक करें
+- [`readConnection()`](#readconnection): वर्तमान संबंध स्थिति जांचें
+- [`writeConnectionRow()`](#writeconnectionrow): जुड़े हुए मित्र के साथ संदेश/डेटा का आदान-प्रदान करें
+- [`fetchUserConnections()`](#fetchuserconnections): सभी कनेक्शन प्राप्त करें (भेजे और प्राप्त अनुरोध)
+
+---
+
+### डेटाबेस टेबल्स
+
+JSON डेटा को डेटाबेस की तरह टेबल्स में स्टोर करें।
+
+#### टेबल्स कैसे बनती हैं?
+
+कोई समर्पित "create table" फ़ंक्शन नहीं है। [`writeRow()`](#writerow) के पहले लेखन से टेबल अपने आप बन जाती है।
+
+<Note>
+टेबल को `dbRootId` और `tableSeed` (टेबल नाम) के संयोजन से uniquely पहचाना जाता है।
+</Note>
+
+#### संबंधित प्रमुख फ़ंक्शन्स
+
+- [`writeRow()`](#writerow): नई पंक्ति जोड़ें (टेबल न हो तो बना देता है)
+- [`readTableRows()`](#readtablerows): टेबल की पंक्तियाँ पढ़ें
+- [`getTablelistFromRoot()`](#gettablelistfromroot): डेटाबेस की सभी टेबल्स सूचीबद्ध करें
+- [`fetchInventoryTransactions()`](#fetchinventorytransactions): अपलोड की गई फाइलें सूचीबद्ध करें
+
+---
+
+## फ़ंक्शन विवरण
+
+### डेटा स्टोरेज और रिट्रीवल
+
+#### `codeIn()`
+
+| **पैरामीटर्स** | `connection`: Solana RPC कनेक्शन<br/>`signer`: साइनिंग वॉलेट<br/>`data`: अपलोड करने वाला डेटा (एकल स्ट्रिंग या ऐरे)<br/>`mode`: कॉन्ट्रैक्ट मोड (डिफ़ॉल्ट: 'anchor') |
+|----------------|--------------------------|
+| **रिटर्न** | ट्रांजैक्शन सिग्नेचर (string) |
+
+```typescript
+import { codeIn } from 'iqlabs-sdk';
+
+// एक फाइल अपलोड करें
+const signature = await codeIn(connection, signer, 'Hello, blockchain!');
+
+// कई फाइलें अपलोड करें
+const multiSig = await codeIn(connection, signer, ['file1.txt', 'file2.txt', 'file3.txt']);
+```
+
+---
+
+#### `readCodeIn()`
+
+| **पैरामीटर्स** | `txSignature`: ट्रांजैक्शन सिग्नेचर<br/>`connection`: (वैकल्पिक) Solana RPC कनेक्शन |
+|----------------|--------------------------|
+| **रिटर्न** | स्टोर किया गया डेटा (string) |
+
+```typescript
+import { readCodeIn } from 'iqlabs-sdk';
+
+const data = await readCodeIn('5Xg7...', connection);
+console.log(data); // 'Hello, blockchain!'
+```
+
+---
+
+### कनेक्शन प्रबंधन
+
+#### `requestConnection()`
+
+| **पैरामीटर्स** | `connection`: Solana RPC कनेक्शन<br/>`signer`: साइनिंग वॉलेट<br/>`dbRootId`: डेटाबेस ID<br/>`partyA`, `partyB`: जोड़ने वाले दो उपयोगकर्ता<br/>`tableName`: कनेक्शन टेबल नाम<br/>`columns`: कॉलम सूची<br/>`idCol`: ID कॉलम<br/>`extKeys`: एक्सटेंशन कीज़ |
+|----------------|--------------------------|
+| **रिटर्न** | ट्रांजैक्शन सिग्नेचर (string) |
+
+```typescript
+import { requestConnection } from 'iqlabs-sdk';
+
+// मित्र अनुरोध भेजें
+await requestConnection(
+  connection, signer, 'my-db',
+  myWalletAddress, friendWalletAddress,
+  'dm_table', ['message', 'timestamp'], 'message_id', []
+);
+```
+
+---
+
+#### `manageConnection()`
+
+| **पैरामीटर्स** | `builder`: InstructionBuilder<br/>`accounts`: `{ db_root, connection_table, signer }`<br/>`args`: `{ db_root_id, connection_seed, new_status }` |
+|----------------|--------------------------|
+| **रिटर्न** | TransactionInstruction |
+
+```typescript
+import { contract } from 'iqlabs-sdk';
+
+// मित्र अनुरोध स्वीकार करें
+const approveIx = contract.manageConnectionInstruction(
+  builder,
+  { db_root, connection_table, signer: myPubkey },
+  { db_root_id, connection_seed, new_status: contract.CONNECTION_STATUS_APPROVED }
+);
+
+// उपयोगकर्ता को ब्लॉक करें
+const blockIx = contract.manageConnectionInstruction(
+  builder,
+  { db_root, connection_table, signer: myPubkey },
+  { db_root_id, connection_seed, new_status: contract.CONNECTION_STATUS_BLOCKED }
+);
+```
+
+---
+
+#### `readConnection()`
+
+| **पैरामीटर्स** | `dbRootId`: डेटाबेस ID<br/>`walletA`, `walletB`: जांचने वाले दो वॉलेट |
+|----------------|--------------------------|
+| **रिटर्न** | `{ status: 'pending' \| 'approved' \| 'blocked', requester, blocker }` |
+
+```typescript
+import { readConnection } from 'iqlabs-sdk';
+
+const { status, requester, blocker } = await readConnection('my-db', walletA, walletB);
+console.log(status); // 'pending' | 'approved' | 'blocked'
+```
+
+---
+
+#### `writeConnectionRow()`
+
+| **पैरामीटर्स** | `connection`: Solana RPC कनेक्शन<br/>`signer`: साइनिंग वॉलेट<br/>`dbRootId`: डेटाबेस ID<br/>`connectionSeed`: कनेक्शन सीड<br/>`rowJson`: JSON डेटा |
+|----------------|--------------------------|
+| **रिटर्न** | ट्रांजैक्शन सिग्नेचर (string) |
+
+```typescript
+import { writeConnectionRow } from 'iqlabs-sdk';
+
+await writeConnectionRow(
+  connection, signer, 'my-db', connectionSeed,
+  JSON.stringify({ message_id: '123', message: 'Hello friend!', timestamp: Date.now() })
+);
+```
+
+---
+
+#### `fetchUserConnections()`
+
+UserState PDA के ट्रांजैक्शन इतिहास का विश्लेषण करके उपयोगकर्ता के सभी कनेक्शन (मित्र अनुरोध) प्राप्त करता है। हर कनेक्शन में उसका `dbRootId` शामिल होता है, जिससे पता चलता है कि कनेक्शन किस ऐप से संबंधित है।
+
+| **पैरामीटर्स** | `userPubkey`: उपयोगकर्ता पब्लिक की (string या PublicKey)<br/>`options`: वैकल्पिक सेटिंग्स |
+|----------------|--------------------------|
+| **विकल्प** | `limit`: अधिकतम ट्रांजैक्शन संख्या<br/>`before`: पेजिनेट करने के लिए सिग्नेचर<br/>`speed`: रेट लिमिट प्रोफ़ाइल ('light', 'medium', 'heavy', 'extreme')<br/>`mode`: कॉन्ट्रैक्ट मोड (वैकल्पिक) |
+| **रिटर्न** | dbRootId, partyA, partyB, status, requester, blocker, timestamp के साथ कनेक्शन ऑब्जेक्ट्स का ऐरे |
+
+```typescript
+import { fetchUserConnections } from 'iqlabs-sdk/reader';
+
+// सभी कनेक्शन प्राप्त करें (सभी ऐप्स में!)
+const connections = await fetchUserConnections(myPubkey, {
+  speed: 'light',  // 6 RPS (डिफ़ॉल्ट)
+  limit: 100
+});
+
+// ऐप के अनुसार फ़िल्टर करें
+const solchatConnections = connections.filter(c => c.dbRootId === 'solchat');
+const zoConnections = connections.filter(c => c.dbRootId === 'zo-trading');
+
+// स्टेटस के अनुसार फ़िल्टर करें
+const pendingRequests = connections.filter(c => c.status === 'pending');
+const friends = connections.filter(c => c.status === 'approved');
+const blocked = connections.filter(c => c.status === 'blocked');
+
+// कनेक्शन विवरण देखें
+connections.forEach(conn => {
+  console.log(`App: ${conn.dbRootId}, ${conn.partyA} <-> ${conn.partyB}, status: ${conn.status}`);
+});
+```
+
+---
+
+### टेबल प्रबंधन
+
+#### `writeRow()`
+
+| **पैरामीटर्स** | `connection`: Solana RPC कनेक्शन<br/>`signer`: साइनिंग वॉलेट<br/>`dbRootId`: डेटाबेस ID<br/>`tableSeed`: टेबल नाम<br/>`rowJson`: JSON पंक्ति डेटा |
+|----------------|--------------------------|
+| **रिटर्न** | ट्रांजैक्शन सिग्नेचर (string) |
+
+```typescript
+import { writeRow } from 'iqlabs-sdk';
+
+// पहली पंक्ति लिखकर टेबल बनाएं
+await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
+  id: 1, name: 'Alice', email: 'alice@example.com'
+}));
+
+// उसी टेबल में दूसरी पंक्ति जोड़ें
+await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
+  id: 2, name: 'Bob', email: 'bob@example.com'
+}));
+```
+
+---
+
+#### `readTableRows()`
+
+| **पैरामीटर्स** | `accountInfo`: टेबल अकाउंट जानकारी |
+|----------------|--------------------------|
+| **रिटर्न** | पंक्ति ऐरे (Row[]) |
+
+```typescript
+import { readTableRows, contract } from 'iqlabs-sdk';
+
+const dbRootPda = contract.pda.getDbRootPda('my-db');
+const tablePda = contract.pda.getTablePda(dbRootPda, 'users');
+const accountInfo = await connection.getAccountInfo(tablePda);
+const rows = readTableRows(accountInfo);
+
+console.log(`Total rows: ${rows.length}`);
+```
+
+---
+
+#### `getTablelistFromRoot()`
+
+| **पैरामीटर्स** | `dbRootId`: डेटाबेस ID |
+|----------------|--------------------------|
+| **रिटर्न** | टेबल नामों का ऐरे (string[]) |
+
+```typescript
+import { getTablelistFromRoot } from 'iqlabs-sdk';
+
+const tables = await getTablelistFromRoot('my-db');
+console.log('Table list:', tables);
+```
+
+---
+
+#### `fetchInventoryTransactions()`
+
+| **पैरामीटर्स** | `userPubkey`: उपयोगकर्ता पब्लिक की<br/>`limit`: अधिकतम (वैकल्पिक) |
+|----------------|--------------------------|
+| **रिटर्न** | ट्रांजैक्शन ऐरे |
+
+```typescript
+import { fetchInventoryTransactions } from 'iqlabs-sdk';
+
+const myFiles = await fetchInventoryTransactions(myPubkey, 20);
+myFiles.forEach(tx => {
+  let metadata: { data?: unknown } | null = null;
+  try {
+    metadata = JSON.parse(tx.metadata);
+  } catch {
+    metadata = null;
+  }
+
+  if (metadata && metadata.data !== undefined) {
+    const inlineData = typeof metadata.data === 'string'
+      ? metadata.data
+      : JSON.stringify(metadata.data);
+    console.log(`Inline data: ${inlineData}`);
+  } else {
+    console.log(`Signature: ${tx.signature}`);
+  }
+});
+```
+
+---
+
+### एनवायरनमेंट सेटिंग्स
+
+#### `setRpcUrl()`
+
+| **पैरामीटर्स** | `url`: Solana RPC URL |
+|----------------|--------------------------|
+| **रिटर्न** | कोई नहीं (void) |
+
+```typescript
+import { setRpcUrl } from 'iqlabs-sdk';
+
+setRpcUrl('https://your-rpc.example.com');
+```
+
+---
+
+## एडवांस्ड फ़ंक्शन्स
+
+<Warning>
+ये लो-लेवल SDK फ़ंक्शन्स हैं। सामान्य उपयोग के लिए आवश्यक नहीं, लेकिन कस्टम फीचर्स बनाने या डिबगिंग में मददगार हैं।
+</Warning>
+
+### राइटर फ़ंक्शन्स
+
+#### `manageRowData()`
+
+टेबल्स में पंक्ति डेटा प्रबंधन के लिए लो-लेवल फ़ंक्शन।
+
+| **मॉड्यूल** | `writer` |
+|------------|----------|
+| **यूज़ केस** | कस्टम पंक्ति प्रबंधन, बैच ऑपरेशन्स |
+
+```typescript
+import { manageRowData } from 'iqlabs-sdk/writer';
+
+await manageRowData(connection, signer, {
+  dbRootId: 'my-db',
+  tableSeed: 'users',
+  operation: 'update',
+  rowData: JSON.stringify({ id: 1, name: 'Updated Name' })
+});
+```
+
+---
+
+### रीडर फ़ंक्शन्स
+
+#### `readUserState()`
+
+किसी उपयोगकर्ता का UserState PDA पढ़ता है।
+
+| **मॉड्यूल** | `reader` |
+|------------|----------|
+| **यूज़ केस** | प्रोफ़ाइल डेटा प्राप्त करना, अपलोड काउंट जांचना |
+
+```typescript
+import { readUserState } from 'iqlabs-sdk/reader';
+
+const userState = await readUserState(userPubkey);
+console.log('Profile:', userState.profile);
+console.log('Upload count:', userState.fileCount);
+```
+
+---
+
+#### `readInventoryMetadata()`
+
+उपयोगकर्ता की इन्वेंटरी (अपलोड की गई फाइलें) से जुड़ा मेटाडेटा पढ़ता है।
+
+| **मॉड्यूल** | `reader` |
+|------------|----------|
+| **यूज़ केस** | मेटाडेटा के साथ यूज़र फाइलें सूचीबद्ध करना, फाइल प्रबंधन |
+
+```typescript
+import { readInventoryMetadata } from 'iqlabs-sdk/reader';
+
+const metadata = await readInventoryMetadata(userPubkey);
+metadata.forEach(item => {
+  console.log(`File: ${item.name}, Size: ${item.size}, Signature: ${item.signature}`);
+});
+```
+
+---
+
+#### `fetchAccountTransactions()`
+
+किसी विशेष अकाउंट के सभी ट्रांजैक्शन्स प्राप्त करता है।
+
+| **मॉड्यूल** | `reader` |
+|------------|----------|
+| **यूज़ केस** | ट्रांजैक्शन इतिहास, अकाउंट विश्लेषण, डिबगिंग |
+
+```typescript
+import { fetchAccountTransactions } from 'iqlabs-sdk/reader';
+
+const transactions = await fetchAccountTransactions(accountPubkey, {
+  limit: 50,
+  before: lastSignature
+});
+
+transactions.forEach(tx => {
+  console.log(`Signature: ${tx.signature}, Block: ${tx.slot}`);
+});
+```
+
+---
+
+#### `getSessionPdaList()`
+
+सेशन PDAs की सूची प्राप्त करता है।
+
+| **मॉड्यूल** | `reader` |
+|------------|----------|
+| **यूज़ केस** | सेशन प्रबंधन, सक्रिय सेशन ट्रैकिंग |
+
+```typescript
+import { getSessionPdaList } from 'iqlabs-sdk/reader';
+
+const sessions = await getSessionPdaList(userPubkey);
+sessions.forEach(session => {
+  console.log(`Session PDA: ${session.pda}, Active: ${session.isActive}`);
+});
+```
+
+---
+
+### यूटिलिटी फ़ंक्शन्स
+
+#### `deriveDmSeed()`
+
+दो उपयोगकर्ताओं के बीच डायरेक्ट मैसेज (DM) के लिए एक निर्धारक सीड बनाता है।
+
+| **मॉड्यूल** | `utils` / `reader` |
+|------------|----------|
+| **यूज़ केस** | सुसंगत कनेक्शन पहचान बनाना, DM चैनल सेटअप |
+
+```typescript
+import { deriveDmSeed } from 'iqlabs-sdk/utils';
+
+const seed1 = deriveDmSeed(walletA, walletB);
+const seed2 = deriveDmSeed(walletB, walletA);
+console.log(seed1 === seed2); // true
+```
+
+---
+
+#### `toSeedBytes()`
+
+स्ट्रिंग सीड को PDA डेरिवेशन के लिए आवश्यक बाइट फ़ॉर्मेट में बदलता है।
+
+| **मॉड्यूल** | `utils` |
+|------------|----------|
+| **यूज़ केस** | कस्टम PDA डेरिवेशन, लो-लेवल सीड मैनिपुलेशन |
+
+```typescript
+import { toSeedBytes } from 'iqlabs-sdk/utils';
+
+const seedString = 'my-custom-seed';
+const seedBytes = toSeedBytes(seedString);
+
+const [pda, bump] = PublicKey.findProgramAddressSync(
+  [seedBytes, otherSeed],
+  programId
+);
+```

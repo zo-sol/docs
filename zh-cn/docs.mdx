@@ -1,0 +1,504 @@
+---
+title: "开发者文档"
+description: "IQLabs SDK 的核心概念与函数"
+---
+
+<Note>
+本文档仍在完善中，将持续更新。
+</Note>
+
+## 核心概念
+
+这是在使用 IQLabs SDK 之前需要了解的关键概念。
+
+---
+
+### 数据存储（Code In）
+
+这是将任何数据（文件、文本、JSON）上链的方式。
+
+#### 如何存储？
+
+SDK 会根据数据大小选择最优方式：
+
+- **小数据 (&lt; 900 bytes)**：立即存储，速度最快
+- **中等数据 (&lt; 8.5 KB)**：拆分为多笔交易
+- **大数据 (&gt;= 8.5 KB)**：并行上传以提升速度
+
+#### 关键相关函数
+
+- [`codeIn()`](#codein)：上传数据并获取交易 ID
+- [`readCodeIn()`](#readcodein)：通过交易 ID 读取数据
+
+---
+
+### 用户状态 PDA
+
+用于用户的链上资料账户。
+
+#### 会存储什么？
+
+- 资料信息（姓名、头像、简介等）
+- 已上传文件数量
+- 好友请求记录
+
+<Note>
+好友请求不会以值的形式存储在 PDA 中；它们以交易形式发送。
+</Note>
+
+#### 何时创建？
+
+第一次调用 [`codeIn()`](#codein) 时会自动创建。无需额外设置，但第一个用户可能需要签名两次。
+
+---
+
+### 连接 PDA
+
+管理两个用户之间关系（好友、消息等）的链上账户。
+
+#### 可有哪些状态？
+
+- **pending**：已发送好友请求但尚未接受
+- **approved**：请求已接受，用户已连接
+- **blocked**：一方已屏蔽另一方
+
+<Warning>
+被屏蔽的连接只能由屏蔽方解除。
+</Warning>
+
+#### 关键相关函数
+
+- [`requestConnection()`](#requestconnection)：发送好友请求（创建 pending）
+- [`manageConnection()`](#manageconnection)：接受/拒绝/屏蔽/解除屏蔽请求
+- [`readConnection()`](#readconnection)：检查当前关系状态
+- [`writeConnectionRow()`](#writeconnectionrow)：与已连接的好友交换消息/数据
+- [`fetchUserConnections()`](#fetchuserconnections)：获取所有连接（发送与接收的好友请求）
+
+---
+
+### 数据库表
+
+像数据库一样用表存储 JSON 数据。
+
+#### 表如何创建？
+
+没有专门的“创建表”函数。第一次通过 [`writeRow()`](#writerow) 写入会自动创建表。
+
+<Note>
+表由 `dbRootId` 与 `tableSeed`（表名）的组合唯一标识。
+</Note>
+
+#### 关键相关函数
+
+- [`writeRow()`](#writerow)：添加新行（若不存在则创建表）
+- [`readTableRows()`](#readtablerows)：读取表中的行
+- [`getTablelistFromRoot()`](#gettablelistfromroot)：列出数据库中的所有表
+- [`fetchInventoryTransactions()`](#fetchinventorytransactions)：列出已上传文件
+
+---
+
+## 函数详情
+
+### 数据存储与读取
+
+#### `codeIn()`
+
+| **参数** | `connection`：Solana RPC 连接<br/>`signer`：签名钱包<br/>`data`：要上传的数据（单个字符串或数组）<br/>`mode`：合约模式（默认：'anchor'） |
+|----------------|--------------------------|
+| **返回** | 交易签名（string） |
+
+```typescript
+import { codeIn } from 'iqlabs-sdk';
+
+// 上传单个文件
+const signature = await codeIn(connection, signer, 'Hello, blockchain!');
+
+// 上传多个文件
+const multiSig = await codeIn(connection, signer, ['file1.txt', 'file2.txt', 'file3.txt']);
+```
+
+---
+
+#### `readCodeIn()`
+
+| **参数** | `txSignature`：交易签名<br/>`connection`：（可选）Solana RPC 连接 |
+|----------------|--------------------------|
+| **返回** | 存储的数据（string） |
+
+```typescript
+import { readCodeIn } from 'iqlabs-sdk';
+
+const data = await readCodeIn('5Xg7...', connection);
+console.log(data); // 'Hello, blockchain!'
+```
+
+---
+
+### 连接管理
+
+#### `requestConnection()`
+
+| **参数** | `connection`：Solana RPC 连接<br/>`signer`：签名钱包<br/>`dbRootId`：数据库 ID<br/>`partyA`, `partyB`：要连接的两个用户<br/>`tableName`：连接表名称<br/>`columns`：列列表<br/>`idCol`：ID 列<br/>`extKeys`：扩展键 |
+|----------------|--------------------------|
+| **返回** | 交易签名（string） |
+
+```typescript
+import { requestConnection } from 'iqlabs-sdk';
+
+// 发送好友请求
+await requestConnection(
+  connection, signer, 'my-db',
+  myWalletAddress, friendWalletAddress,
+  'dm_table', ['message', 'timestamp'], 'message_id', []
+);
+```
+
+---
+
+#### `manageConnection()`
+
+| **参数** | `builder`：InstructionBuilder<br/>`accounts`：`{ db_root, connection_table, signer }`<br/>`args`：`{ db_root_id, connection_seed, new_status }` |
+|----------------|--------------------------|
+| **返回** | TransactionInstruction |
+
+```typescript
+import { contract } from 'iqlabs-sdk';
+
+// 接受好友请求
+const approveIx = contract.manageConnectionInstruction(
+  builder,
+  { db_root, connection_table, signer: myPubkey },
+  { db_root_id, connection_seed, new_status: contract.CONNECTION_STATUS_APPROVED }
+);
+
+// 屏蔽用户
+const blockIx = contract.manageConnectionInstruction(
+  builder,
+  { db_root, connection_table, signer: myPubkey },
+  { db_root_id, connection_seed, new_status: contract.CONNECTION_STATUS_BLOCKED }
+);
+```
+
+---
+
+#### `readConnection()`
+
+| **参数** | `dbRootId`：数据库 ID<br/>`walletA`, `walletB`：要检查的两个钱包 |
+|----------------|--------------------------|
+| **返回** | `{ status: 'pending' \| 'approved' \| 'blocked', requester, blocker }` |
+
+```typescript
+import { readConnection } from 'iqlabs-sdk';
+
+const { status, requester, blocker } = await readConnection('my-db', walletA, walletB);
+console.log(status); // 'pending' | 'approved' | 'blocked'
+```
+
+---
+
+#### `writeConnectionRow()`
+
+| **参数** | `connection`：Solana RPC 连接<br/>`signer`：签名钱包<br/>`dbRootId`：数据库 ID<br/>`connectionSeed`：连接种子<br/>`rowJson`：JSON 数据 |
+|----------------|--------------------------|
+| **返回** | 交易签名（string） |
+
+```typescript
+import { writeConnectionRow } from 'iqlabs-sdk';
+
+await writeConnectionRow(
+  connection, signer, 'my-db', connectionSeed,
+  JSON.stringify({ message_id: '123', message: 'Hello friend!', timestamp: Date.now() })
+);
+```
+
+---
+
+#### `fetchUserConnections()`
+
+通过分析 UserState PDA 的交易历史来获取用户的所有连接（好友请求）。每个连接包含其 `dbRootId`，用于标识该连接所属的应用。
+
+| **参数** | `userPubkey`：用户公钥（string 或 PublicKey）<br/>`options`：可选设置 |
+|----------------|--------------------------|
+| **选项** | `limit`：最多获取的交易数<br/>`before`：用于分页的起始签名<br/>`speed`：速率限制配置（'light', 'medium', 'heavy', 'extreme'）<br/>`mode`：合约模式（可选） |
+| **返回** | 包含 dbRootId, partyA, partyB, status, requester, blocker, timestamp 的连接对象数组 |
+
+```typescript
+import { fetchUserConnections } from 'iqlabs-sdk/reader';
+
+// 获取所有连接（跨所有应用！）
+const connections = await fetchUserConnections(myPubkey, {
+  speed: 'light',  // 6 RPS（默认）
+  limit: 100
+});
+
+// 按应用过滤
+const solchatConnections = connections.filter(c => c.dbRootId === 'solchat');
+const zoConnections = connections.filter(c => c.dbRootId === 'zo-trading');
+
+// 按状态过滤
+const pendingRequests = connections.filter(c => c.status === 'pending');
+const friends = connections.filter(c => c.status === 'approved');
+const blocked = connections.filter(c => c.status === 'blocked');
+
+// 查看连接详情
+connections.forEach(conn => {
+  console.log(`App: ${conn.dbRootId}, ${conn.partyA} <-> ${conn.partyB}, status: ${conn.status}`);
+});
+```
+
+---
+
+### 表管理
+
+#### `writeRow()`
+
+| **参数** | `connection`：Solana RPC 连接<br/>`signer`：签名钱包<br/>`dbRootId`：数据库 ID<br/>`tableSeed`：表名<br/>`rowJson`：JSON 行数据 |
+|----------------|--------------------------|
+| **返回** | 交易签名（string） |
+
+```typescript
+import { writeRow } from 'iqlabs-sdk';
+
+// 写入第一行以创建表
+await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
+  id: 1, name: 'Alice', email: 'alice@example.com'
+}));
+
+// 向同一张表添加另一行
+await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
+  id: 2, name: 'Bob', email: 'bob@example.com'
+}));
+```
+
+---
+
+#### `readTableRows()`
+
+| **参数** | `accountInfo`：表账户信息 |
+|----------------|--------------------------|
+| **返回** | 行数组（Row[]） |
+
+```typescript
+import { readTableRows, contract } from 'iqlabs-sdk';
+
+const dbRootPda = contract.pda.getDbRootPda('my-db');
+const tablePda = contract.pda.getTablePda(dbRootPda, 'users');
+const accountInfo = await connection.getAccountInfo(tablePda);
+const rows = readTableRows(accountInfo);
+
+console.log(`Total rows: ${rows.length}`);
+```
+
+---
+
+#### `getTablelistFromRoot()`
+
+| **参数** | `dbRootId`：数据库 ID |
+|----------------|--------------------------|
+| **返回** | 表名数组（string[]） |
+
+```typescript
+import { getTablelistFromRoot } from 'iqlabs-sdk';
+
+const tables = await getTablelistFromRoot('my-db');
+console.log('Table list:', tables);
+```
+
+---
+
+#### `fetchInventoryTransactions()`
+
+| **参数** | `userPubkey`：用户公钥<br/>`limit`：最大数量（可选） |
+|----------------|--------------------------|
+| **返回** | 交易数组 |
+
+```typescript
+import { fetchInventoryTransactions } from 'iqlabs-sdk';
+
+const myFiles = await fetchInventoryTransactions(myPubkey, 20);
+myFiles.forEach(tx => {
+  let metadata: { data?: unknown } | null = null;
+  try {
+    metadata = JSON.parse(tx.metadata);
+  } catch {
+    metadata = null;
+  }
+
+  if (metadata && metadata.data !== undefined) {
+    const inlineData = typeof metadata.data === 'string'
+      ? metadata.data
+      : JSON.stringify(metadata.data);
+    console.log(`Inline data: ${inlineData}`);
+  } else {
+    console.log(`Signature: ${tx.signature}`);
+  }
+});
+```
+
+---
+
+### 环境设置
+
+#### `setRpcUrl()`
+
+| **参数** | `url`：Solana RPC URL |
+|----------------|--------------------------|
+| **返回** | 无（void） |
+
+```typescript
+import { setRpcUrl } from 'iqlabs-sdk';
+
+setRpcUrl('https://your-rpc.example.com');
+```
+
+---
+
+## 高级函数
+
+<Warning>
+这些是低级 SDK 函数。一般使用不需要，但在构建自定义功能或调试时很有用。
+</Warning>
+
+### 写入函数
+
+#### `manageRowData()`
+
+用于管理表中行数据的低级函数。
+
+| **模块** | `writer` |
+|------------|----------|
+| **用途** | 自定义行管理、批量操作 |
+
+```typescript
+import { manageRowData } from 'iqlabs-sdk/writer';
+
+await manageRowData(connection, signer, {
+  dbRootId: 'my-db',
+  tableSeed: 'users',
+  operation: 'update',
+  rowData: JSON.stringify({ id: 1, name: 'Updated Name' })
+});
+```
+
+---
+
+### 读取函数
+
+#### `readUserState()`
+
+读取指定用户的 UserState PDA。
+
+| **模块** | `reader` |
+|------------|----------|
+| **用途** | 获取用户资料数据、检查上传数量 |
+
+```typescript
+import { readUserState } from 'iqlabs-sdk/reader';
+
+const userState = await readUserState(userPubkey);
+console.log('Profile:', userState.profile);
+console.log('Upload count:', userState.fileCount);
+```
+
+---
+
+#### `readInventoryMetadata()`
+
+读取与用户库存（上传文件）相关的元数据。
+
+| **模块** | `reader` |
+|------------|----------|
+| **用途** | 列出带元数据的用户文件、文件管理 |
+
+```typescript
+import { readInventoryMetadata } from 'iqlabs-sdk/reader';
+
+const metadata = await readInventoryMetadata(userPubkey);
+metadata.forEach(item => {
+  console.log(`File: ${item.name}, Size: ${item.size}, Signature: ${item.signature}`);
+});
+```
+
+---
+
+#### `fetchAccountTransactions()`
+
+获取指定账户的所有交易。
+
+| **模块** | `reader` |
+|------------|----------|
+| **用途** | 交易历史、账户分析、调试 |
+
+```typescript
+import { fetchAccountTransactions } from 'iqlabs-sdk/reader';
+
+const transactions = await fetchAccountTransactions(accountPubkey, {
+  limit: 50,
+  before: lastSignature
+});
+
+transactions.forEach(tx => {
+  console.log(`Signature: ${tx.signature}, Block: ${tx.slot}`);
+});
+```
+
+---
+
+#### `getSessionPdaList()`
+
+获取会话 PDA 列表。
+
+| **模块** | `reader` |
+|------------|----------|
+| **用途** | 会话管理、活跃会话跟踪 |
+
+```typescript
+import { getSessionPdaList } from 'iqlabs-sdk/reader';
+
+const sessions = await getSessionPdaList(userPubkey);
+sessions.forEach(session => {
+  console.log(`Session PDA: ${session.pda}, Active: ${session.isActive}`);
+});
+```
+
+---
+
+### 工具函数
+
+#### `deriveDmSeed()`
+
+为两个用户之间的私信（DM）派生确定性种子。
+
+| **模块** | `utils` / `reader` |
+|------------|----------|
+| **用途** | 创建一致的连接标识、设置 DM 通道 |
+
+```typescript
+import { deriveDmSeed } from 'iqlabs-sdk/utils';
+
+const seed1 = deriveDmSeed(walletA, walletB);
+const seed2 = deriveDmSeed(walletB, walletA);
+console.log(seed1 === seed2); // true
+```
+
+---
+
+#### `toSeedBytes()`
+
+将字符串种子转换为 PDA 派生所需的字节格式。
+
+| **模块** | `utils` |
+|------------|----------|
+| **用途** | 自定义 PDA 派生、低级种子操作 |
+
+```typescript
+import { toSeedBytes } from 'iqlabs-sdk/utils';
+
+const seedString = 'my-custom-seed';
+const seedBytes = toSeedBytes(seedString);
+
+const [pda, bump] = PublicKey.findProgramAddressSync(
+  [seedBytes, otherSeed],
+  programId
+);
+```

@@ -1,0 +1,504 @@
+---
+title: "開発者向けドキュメント"
+description: "IQLabs SDK の主要な概念と関数"
+---
+
+<Note>
+このドキュメントは作成中で、今後改善されます。
+</Note>
+
+## コア概念
+
+これらは IQLabs SDK を使う前に知っておくべき主要な概念です。
+
+---
+
+### データストレージ（Code In）
+
+あらゆるデータ（ファイル、テキスト、JSON）をオンチェーンに保存する方法です。
+
+#### どのように保存されますか？
+
+データサイズに応じて、SDK が最適な方法を選びます。
+
+- **小容量データ (&lt; 900 bytes)**：すぐに保存、最速
+- **中容量データ (&lt; 8.5 KB)**：複数のトランザクションに分割
+- **大容量データ (&gt;= 8.5 KB)**：速度向上のため並列アップロード
+
+#### 関連する主要関数
+
+- [`codeIn()`](#codein)：データをアップロードしてトランザクション ID を取得
+- [`readCodeIn()`](#readcodein)：トランザクション ID からデータを読み戻す
+
+---
+
+### ユーザー状態 PDA
+
+ユーザーのためのオンチェーン・プロフィールアカウントです。
+
+#### 何が保存されますか？
+
+- プロフィール情報（名前、プロフィール画像、自己紹介 など）
+- アップロードされたファイル数
+- フレンドリクエストの記録
+
+<Note>
+フレンドリクエストは PDA の値として保存されず、トランザクションとして送信されます。
+</Note>
+
+#### いつ作成されますか？
+
+[`codeIn()`](#codein) を初めて呼び出したときに自動で作成されます。追加の設定は不要ですが、最初のユーザーは 2 回署名が必要な場合があります。
+
+---
+
+### 接続 PDA
+
+2 人のユーザー間の関係（友だち、メッセージ など）を管理するオンチェーンアカウントです。
+
+#### どの状態になれますか？
+
+- **pending**：フレンドリクエストが送信されたが、まだ承認されていない
+- **approved**：リクエストが承認され、ユーザーが接続済み
+- **blocked**：どちらかが相手をブロックした
+
+<Warning>
+ブロックされた接続は、ブロックした側だけが解除できます。
+</Warning>
+
+#### 関連する主要関数
+
+- [`requestConnection()`](#requestconnection)：フレンドリクエストを送信（pending を作成）
+- [`manageConnection()`](#manageconnection)：リクエストの承認/拒否/ブロック/解除
+- [`readConnection()`](#readconnection)：現在の関係ステータスを確認
+- [`writeConnectionRow()`](#writeconnectionrow)：接続済みの友だちとメッセージ/データを交換
+- [`fetchUserConnections()`](#fetchuserconnections)：すべての接続（送信・受信したリクエスト）を取得
+
+---
+
+### データベーステーブル
+
+JSON データをデータベースのようにテーブルへ保存します。
+
+#### テーブルはどう作成されますか？
+
+専用の「create table」関数はありません。[`writeRow()`](#writerow) による最初の書き込みが自動的にテーブルを作成します。
+
+<Note>
+テーブルは `dbRootId` と `tableSeed`（テーブル名）の組み合わせで一意に識別されます。
+</Note>
+
+#### 関連する主要関数
+
+- [`writeRow()`](#writerow)：新しい行を追加（テーブルがなければ作成）
+- [`readTableRows()`](#readtablerows)：テーブルの行を読み取る
+- [`getTablelistFromRoot()`](#gettablelistfromroot)：データベース内の全テーブルを一覧表示
+- [`fetchInventoryTransactions()`](#fetchinventorytransactions)：アップロード済みファイルを一覧表示
+
+---
+
+## 関数の詳細
+
+### データの保存と取得
+
+#### `codeIn()`
+
+| **パラメータ** | `connection`：Solana RPC 接続<br/>`signer`：署名用ウォレット<br/>`data`：アップロードするデータ（単一文字列または配列）<br/>`mode`：コントラクトモード（デフォルト: 'anchor'） |
+|----------------|--------------------------|
+| **戻り値** | トランザクション署名（string） |
+
+```typescript
+import { codeIn } from 'iqlabs-sdk';
+
+// 単一ファイルをアップロード
+const signature = await codeIn(connection, signer, 'Hello, blockchain!');
+
+// 複数ファイルをアップロード
+const multiSig = await codeIn(connection, signer, ['file1.txt', 'file2.txt', 'file3.txt']);
+```
+
+---
+
+#### `readCodeIn()`
+
+| **パラメータ** | `txSignature`：トランザクション署名<br/>`connection`：（任意）Solana RPC 接続 |
+|----------------|--------------------------|
+| **戻り値** | 保存されたデータ（string） |
+
+```typescript
+import { readCodeIn } from 'iqlabs-sdk';
+
+const data = await readCodeIn('5Xg7...', connection);
+console.log(data); // 'Hello, blockchain!'
+```
+
+---
+
+### 接続管理
+
+#### `requestConnection()`
+
+| **パラメータ** | `connection`：Solana RPC 接続<br/>`signer`：署名用ウォレット<br/>`dbRootId`：データベース ID<br/>`partyA`, `partyB`：接続する 2 人のユーザー<br/>`tableName`：接続テーブル名<br/>`columns`：列リスト<br/>`idCol`：ID 列<br/>`extKeys`：拡張キー |
+|----------------|--------------------------|
+| **戻り値** | トランザクション署名（string） |
+
+```typescript
+import { requestConnection } from 'iqlabs-sdk';
+
+// フレンドリクエストを送信
+await requestConnection(
+  connection, signer, 'my-db',
+  myWalletAddress, friendWalletAddress,
+  'dm_table', ['message', 'timestamp'], 'message_id', []
+);
+```
+
+---
+
+#### `manageConnection()`
+
+| **パラメータ** | `builder`：InstructionBuilder<br/>`accounts`：`{ db_root, connection_table, signer }`<br/>`args`：`{ db_root_id, connection_seed, new_status }` |
+|----------------|--------------------------|
+| **戻り値** | TransactionInstruction |
+
+```typescript
+import { contract } from 'iqlabs-sdk';
+
+// フレンドリクエストを承認
+const approveIx = contract.manageConnectionInstruction(
+  builder,
+  { db_root, connection_table, signer: myPubkey },
+  { db_root_id, connection_seed, new_status: contract.CONNECTION_STATUS_APPROVED }
+);
+
+// ユーザーをブロック
+const blockIx = contract.manageConnectionInstruction(
+  builder,
+  { db_root, connection_table, signer: myPubkey },
+  { db_root_id, connection_seed, new_status: contract.CONNECTION_STATUS_BLOCKED }
+);
+```
+
+---
+
+#### `readConnection()`
+
+| **パラメータ** | `dbRootId`：データベース ID<br/>`walletA`, `walletB`：確認する 2 つのウォレット |
+|----------------|--------------------------|
+| **戻り値** | `{ status: 'pending' \| 'approved' \| 'blocked', requester, blocker }` |
+
+```typescript
+import { readConnection } from 'iqlabs-sdk';
+
+const { status, requester, blocker } = await readConnection('my-db', walletA, walletB);
+console.log(status); // 'pending' | 'approved' | 'blocked'
+```
+
+---
+
+#### `writeConnectionRow()`
+
+| **パラメータ** | `connection`：Solana RPC 接続<br/>`signer`：署名用ウォレット<br/>`dbRootId`：データベース ID<br/>`connectionSeed`：接続シード<br/>`rowJson`：JSON データ |
+|----------------|--------------------------|
+| **戻り値** | トランザクション署名（string） |
+
+```typescript
+import { writeConnectionRow } from 'iqlabs-sdk';
+
+await writeConnectionRow(
+  connection, signer, 'my-db', connectionSeed,
+  JSON.stringify({ message_id: '123', message: 'Hello friend!', timestamp: Date.now() })
+);
+```
+
+---
+
+#### `fetchUserConnections()`
+
+UserState PDA のトランザクション履歴を解析して、ユーザーのすべての接続（フレンドリクエスト）を取得します。各接続には、その接続が属するアプリを示す `dbRootId` が含まれます。
+
+| **パラメータ** | `userPubkey`：ユーザー公開鍵（string または PublicKey）<br/>`options`：任意の設定 |
+|----------------|--------------------------|
+| **オプション** | `limit`：取得するトランザクションの最大数<br/>`before`：ページネーション開始の署名<br/>`speed`：レート制限プロファイル（'light', 'medium', 'heavy', 'extreme'）<br/>`mode`：コントラクトモード（任意） |
+| **戻り値** | dbRootId, partyA, partyB, status, requester, blocker, timestamp を含む接続オブジェクトの配列 |
+
+```typescript
+import { fetchUserConnections } from 'iqlabs-sdk/reader';
+
+// すべての接続を取得（全アプリ対象）
+const connections = await fetchUserConnections(myPubkey, {
+  speed: 'light',  // 6 RPS（デフォルト）
+  limit: 100
+});
+
+// アプリでフィルタ
+const solchatConnections = connections.filter(c => c.dbRootId === 'solchat');
+const zoConnections = connections.filter(c => c.dbRootId === 'zo-trading');
+
+// ステータスでフィルタ
+const pendingRequests = connections.filter(c => c.status === 'pending');
+const friends = connections.filter(c => c.status === 'approved');
+const blocked = connections.filter(c => c.status === 'blocked');
+
+// 接続の詳細を確認
+connections.forEach(conn => {
+  console.log(`App: ${conn.dbRootId}, ${conn.partyA} <-> ${conn.partyB}, status: ${conn.status}`);
+});
+```
+
+---
+
+### テーブル管理
+
+#### `writeRow()`
+
+| **パラメータ** | `connection`：Solana RPC 接続<br/>`signer`：署名用ウォレット<br/>`dbRootId`：データベース ID<br/>`tableSeed`：テーブル名<br/>`rowJson`：JSON 行データ |
+|----------------|--------------------------|
+| **戻り値** | トランザクション署名（string） |
+
+```typescript
+import { writeRow } from 'iqlabs-sdk';
+
+// 最初の行を書き込み、テーブルを作成
+await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
+  id: 1, name: 'Alice', email: 'alice@example.com'
+}));
+
+// 同じテーブルに別の行を追加
+await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
+  id: 2, name: 'Bob', email: 'bob@example.com'
+}));
+```
+
+---
+
+#### `readTableRows()`
+
+| **パラメータ** | `accountInfo`：テーブルアカウント情報 |
+|----------------|--------------------------|
+| **戻り値** | 行配列（Row[]） |
+
+```typescript
+import { readTableRows, contract } from 'iqlabs-sdk';
+
+const dbRootPda = contract.pda.getDbRootPda('my-db');
+const tablePda = contract.pda.getTablePda(dbRootPda, 'users');
+const accountInfo = await connection.getAccountInfo(tablePda);
+const rows = readTableRows(accountInfo);
+
+console.log(`Total rows: ${rows.length}`);
+```
+
+---
+
+#### `getTablelistFromRoot()`
+
+| **パラメータ** | `dbRootId`：データベース ID |
+|----------------|--------------------------|
+| **戻り値** | テーブル名配列（string[]） |
+
+```typescript
+import { getTablelistFromRoot } from 'iqlabs-sdk';
+
+const tables = await getTablelistFromRoot('my-db');
+console.log('Table list:', tables);
+```
+
+---
+
+#### `fetchInventoryTransactions()`
+
+| **パラメータ** | `userPubkey`：ユーザー公開鍵<br/>`limit`：最大数（任意） |
+|----------------|--------------------------|
+| **戻り値** | トランザクション配列 |
+
+```typescript
+import { fetchInventoryTransactions } from 'iqlabs-sdk';
+
+const myFiles = await fetchInventoryTransactions(myPubkey, 20);
+myFiles.forEach(tx => {
+  let metadata: { data?: unknown } | null = null;
+  try {
+    metadata = JSON.parse(tx.metadata);
+  } catch {
+    metadata = null;
+  }
+
+  if (metadata && metadata.data !== undefined) {
+    const inlineData = typeof metadata.data === 'string'
+      ? metadata.data
+      : JSON.stringify(metadata.data);
+    console.log(`Inline data: ${inlineData}`);
+  } else {
+    console.log(`Signature: ${tx.signature}`);
+  }
+});
+```
+
+---
+
+### 環境設定
+
+#### `setRpcUrl()`
+
+| **パラメータ** | `url`：Solana RPC の URL |
+|----------------|--------------------------|
+| **戻り値** | なし（void） |
+
+```typescript
+import { setRpcUrl } from 'iqlabs-sdk';
+
+setRpcUrl('https://your-rpc.example.com');
+```
+
+---
+
+## 高度な関数
+
+<Warning>
+これらは低レベルの SDK 関数です。通常の利用には不要ですが、カスタム機能の構築やデバッグに役立ちます。
+</Warning>
+
+### 書き込み関数
+
+#### `manageRowData()`
+
+テーブル内の行データを管理する低レベル関数です。
+
+| **モジュール** | `writer` |
+|------------|----------|
+| **用途** | カスタム行管理、バッチ操作 |
+
+```typescript
+import { manageRowData } from 'iqlabs-sdk/writer';
+
+await manageRowData(connection, signer, {
+  dbRootId: 'my-db',
+  tableSeed: 'users',
+  operation: 'update',
+  rowData: JSON.stringify({ id: 1, name: 'Updated Name' })
+});
+```
+
+---
+
+### 読み取り関数
+
+#### `readUserState()`
+
+指定したユーザーの UserState PDA を読み取ります。
+
+| **モジュール** | `reader` |
+|------------|----------|
+| **用途** | プロフィールデータの取得、アップロード数の確認 |
+
+```typescript
+import { readUserState } from 'iqlabs-sdk/reader';
+
+const userState = await readUserState(userPubkey);
+console.log('Profile:', userState.profile);
+console.log('Upload count:', userState.fileCount);
+```
+
+---
+
+#### `readInventoryMetadata()`
+
+ユーザーのインベントリ（アップロード済みファイル）に関連するメタデータを読み取ります。
+
+| **モジュール** | `reader` |
+|------------|----------|
+| **用途** | メタデータ付きのユーザーファイル一覧、ファイル管理 |
+
+```typescript
+import { readInventoryMetadata } from 'iqlabs-sdk/reader';
+
+const metadata = await readInventoryMetadata(userPubkey);
+metadata.forEach(item => {
+  console.log(`File: ${item.name}, Size: ${item.size}, Signature: ${item.signature}`);
+});
+```
+
+---
+
+#### `fetchAccountTransactions()`
+
+特定のアカウントのすべてのトランザクションを取得します。
+
+| **モジュール** | `reader` |
+|------------|----------|
+| **用途** | トランザクション履歴、アカウント分析、デバッグ |
+
+```typescript
+import { fetchAccountTransactions } from 'iqlabs-sdk/reader';
+
+const transactions = await fetchAccountTransactions(accountPubkey, {
+  limit: 50,
+  before: lastSignature
+});
+
+transactions.forEach(tx => {
+  console.log(`Signature: ${tx.signature}, Block: ${tx.slot}`);
+});
+```
+
+---
+
+#### `getSessionPdaList()`
+
+セッション PDA の一覧を取得します。
+
+| **モジュール** | `reader` |
+|------------|----------|
+| **用途** | セッション管理、アクティブセッションの追跡 |
+
+```typescript
+import { getSessionPdaList } from 'iqlabs-sdk/reader';
+
+const sessions = await getSessionPdaList(userPubkey);
+sessions.forEach(session => {
+  console.log(`Session PDA: ${session.pda}, Active: ${session.isActive}`);
+});
+```
+
+---
+
+### ユーティリティ関数
+
+#### `deriveDmSeed()`
+
+2 人のユーザー間のダイレクトメッセージ（DM）用に決定的なシードを導出します。
+
+| **モジュール** | `utils` / `reader` |
+|------------|----------|
+| **用途** | 一貫した接続 ID の作成、DM チャネルの設定 |
+
+```typescript
+import { deriveDmSeed } from 'iqlabs-sdk/utils';
+
+const seed1 = deriveDmSeed(walletA, walletB);
+const seed2 = deriveDmSeed(walletB, walletA);
+console.log(seed1 === seed2); // true
+```
+
+---
+
+#### `toSeedBytes()`
+
+文字列シードを、PDA 導出に必要なバイト形式へ変換します。
+
+| **モジュール** | `utils` |
+|------------|----------|
+| **用途** | カスタム PDA 導出、低レベルなシード操作 |
+
+```typescript
+import { toSeedBytes } from 'iqlabs-sdk/utils';
+
+const seedString = 'my-custom-seed';
+const seedBytes = toSeedBytes(seedString);
+
+const [pda, bump] = PublicKey.findProgramAddressSync(
+  [seedBytes, otherSeed],
+  programId
+);
+```
