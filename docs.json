@@ -35,8 +35,8 @@
     }
   },
   "logo": {
-    "light": "/images/iqlabstitle.png",
-    "dark": "/images/iqlabstitle.png"
+    "light": "/logo/iqlabstitle.png",
+    "dark": "/logo/iqlabstitle.png"
   },
   "navbar": {
     "links": []
