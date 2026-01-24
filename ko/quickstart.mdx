@@ -1,0 +1,364 @@
+---
+title: "빠른 시작"
+description: "IQLabs SDK의 핵심 개념과 함수"
+---
+
+<Note>
+이 문서는 작성 중이며 계속 업데이트될 예정입니다.
+</Note>
+
+## 핵심 개념
+
+IQLabs SDK를 사용하기 전에 알아야 할 주요 개념들입니다.
+
+---
+
+### 데이터 저장 (Code In)
+
+파일, 텍스트, JSON 등 모든 데이터를 온체인에 저장하는 방법입니다.
+
+#### 어떻게 저장되나요?
+
+데이터 크기에 따라 SDK가 최적의 방법을 자동으로 선택합니다:
+
+- **작은 데이터 (&lt; 900 bytes)**: 즉시 저장, 가장 빠름
+- **중간 데이터 (&lt; 8.5 KB)**: 여러 트랜잭션으로 분할
+- **큰 데이터 (&gt;= 8.5 KB)**: 속도를 위해 병렬 업로드
+
+#### 관련 주요 함수
+
+- [`codeIn()`](#codein): 데이터를 업로드하고 트랜잭션 ID를 받음
+- [`readCodeIn()`](#readcodein): 트랜잭션 ID로 데이터를 다시 읽음
+
+---
+
+### User State PDA
+
+사용자를 위한 온체인 프로필 계정입니다.
+
+#### 무엇이 저장되나요?
+
+- 프로필 정보 (이름, 프로필 사진, 소개 등)
+- 업로드한 파일 수
+- 친구 요청 기록
+
+<Note>
+친구 요청은 PDA에 값으로 저장되지 않고 트랜잭션으로 전송됩니다.
+</Note>
+
+#### 언제 생성되나요?
+
+[`codeIn()`](#codein)을 처음 호출할 때 자동으로 생성됩니다. 추가 설정이 필요 없지만, 처음 사용자는 두 번 서명해야 할 수 있습니다.
+
+---
+
+### Connection PDA
+
+두 사용자 간의 관계(친구, 메시지 등)를 관리하는 온체인 계정입니다.
+
+#### 어떤 상태가 있나요?
+
+- **pending**: 친구 요청이 전송되었지만 아직 수락되지 않음
+- **approved**: 요청이 수락되고 사용자들이 연결됨
+- **blocked**: 한쪽이 다른 쪽을 차단함
+
+<Warning>
+차단된 연결은 차단한 사람만 해제할 수 있습니다.
+</Warning>
+
+#### 관련 주요 함수
+
+- [`requestConnection()`](#requestconnection): 친구 요청 보내기 (pending 생성)
+- [`manageConnection()`](#manageconnection): 요청 승인/거절/차단/해제
+- [`readConnection()`](#readconnection): 현재 관계 상태 확인
+- [`writeConnectionRow()`](#writeconnectionrow): 연결된 친구와 메시지/데이터 교환
+- [`fetchUserConnections()`](#fetchuserconnections): 모든 연결 조회 (보낸/받은 친구 요청)
+
+---
+
+### 데이터베이스 테이블
+
+데이터베이스처럼 테이블에 JSON 데이터를 저장합니다.
+
+#### 테이블은 어떻게 생성되나요?
+
+전용 "테이블 생성" 함수가 없습니다. [`writeRow()`](#writerow)를 통한 첫 번째 쓰기가 자동으로 테이블을 생성합니다.
+
+<Note>
+테이블은 `dbRootId`와 `tableSeed` (테이블 이름)의 조합으로 고유하게 식별됩니다.
+</Note>
+
+#### 관련 주요 함수
+
+- [`writeRow()`](#writerow): 새 행 추가 (테이블이 없으면 생성)
+- [`readTableRows()`](#readtablerows): 테이블에서 행 읽기
+- [`getTablelistFromRoot()`](#gettablelistfromroot): 데이터베이스의 모든 테이블 목록 조회
+- [`fetchInventoryTransactions()`](#fetchinventorytransactions): 업로드한 파일 목록 조회
+
+---
+
+## 함수 상세
+
+### 데이터 저장 및 조회
+
+#### `codeIn()`
+
+| **파라미터** | `connection`: Solana RPC 연결<br/>`signer`: 서명 지갑<br/>`data`: 업로드할 데이터 (단일 문자열 또는 배열)<br/>`mode`: 컨트랙트 모드 (기본값: 'anchor') |
+|-------------|--------------------------|
+| **반환값** | 트랜잭션 서명 (string) |
+
+```typescript
+import { codeIn } from 'iqlabs-sdk';
+
+// 단일 파일 업로드
+const signature = await codeIn(connection, signer, 'Hello, blockchain!');
+
+// 여러 파일 업로드
+const multiSig = await codeIn(connection, signer, ['file1.txt', 'file2.txt', 'file3.txt']);
+```
+
+---
+
+#### `readCodeIn()`
+
+| **파라미터** | `txSignature`: 트랜잭션 서명<br/>`connection`: (선택) Solana RPC 연결 |
+|-------------|--------------------------|
+| **반환값** | 저장된 데이터 (string) |
+
+```typescript
+import { readCodeIn } from 'iqlabs-sdk';
+
+const data = await readCodeIn('5Xg7...', connection);
+console.log(data); // 'Hello, blockchain!'
+```
+
+---
+
+### 연결 관리
+
+#### `requestConnection()`
+
+| **파라미터** | `connection`: Solana RPC 연결<br/>`signer`: 서명 지갑<br/>`dbRootId`: 데이터베이스 ID<br/>`partyA`, `partyB`: 연결할 두 사용자<br/>`tableName`: 연결 테이블 이름<br/>`columns`: 컬럼 목록<br/>`idCol`: ID 컬럼<br/>`extKeys`: 확장 키 |
+|-------------|--------------------------|
+| **반환값** | 트랜잭션 서명 (string) |
+
+```typescript
+import { requestConnection } from 'iqlabs-sdk';
+
+await requestConnection(
+  connection, signer, 'my-db',
+  myWalletAddress, friendWalletAddress,
+  'dm_table', ['message', 'timestamp'], 'message_id', []
+);
+```
+
+---
+
+#### `manageConnection()`
+
+| **파라미터** | `builder`: InstructionBuilder<br/>`accounts`: `{ db_root, connection_table, signer }`<br/>`args`: `{ db_root_id, connection_seed, new_status }` |
+|-------------|--------------------------|
+| **반환값** | TransactionInstruction |
+
+```typescript
+import { contract } from 'iqlabs-sdk';
+
+// 친구 요청 승인
+const approveIx = contract.manageConnectionInstruction(
+  builder,
+  { db_root, connection_table, signer: myPubkey },
+  { db_root_id, connection_seed, new_status: contract.CONNECTION_STATUS_APPROVED }
+);
+
+// 사용자 차단
+const blockIx = contract.manageConnectionInstruction(
+  builder,
+  { db_root, connection_table, signer: myPubkey },
+  { db_root_id, connection_seed, new_status: contract.CONNECTION_STATUS_BLOCKED }
+);
+```
+
+---
+
+#### `readConnection()`
+
+| **파라미터** | `dbRootId`: 데이터베이스 ID<br/>`walletA`, `walletB`: 확인할 두 지갑 |
+|-------------|--------------------------|
+| **반환값** | `{ status: 'pending' \| 'approved' \| 'blocked', requester, blocker }` |
+
+```typescript
+import { readConnection } from 'iqlabs-sdk';
+
+const { status, requester, blocker } = await readConnection('my-db', walletA, walletB);
+console.log(status); // 'pending' | 'approved' | 'blocked'
+```
+
+---
+
+#### `writeConnectionRow()`
+
+| **파라미터** | `connection`: Solana RPC 연결<br/>`signer`: 서명 지갑<br/>`dbRootId`: 데이터베이스 ID<br/>`connectionSeed`: 연결 시드<br/>`rowJson`: JSON 데이터 |
+|-------------|--------------------------|
+| **반환값** | 트랜잭션 서명 (string) |
+
+```typescript
+import { writeConnectionRow } from 'iqlabs-sdk';
+
+await writeConnectionRow(
+  connection, signer, 'my-db', connectionSeed,
+  JSON.stringify({ message_id: '123', message: '안녕 친구야!', timestamp: Date.now() })
+);
+```
+
+---
+
+#### `fetchUserConnections()`
+
+사용자의 UserState PDA 트랜잭션 히스토리를 분석하여 모든 연결(친구 요청)을 조회합니다. 각 연결에는 해당 앱을 식별하는 `dbRootId`가 포함됩니다.
+
+| **파라미터** | `userPubkey`: 사용자 공개키 (string 또는 PublicKey)<br/>`options`: 선택적 설정 |
+|-------------|--------------------------|
+| **옵션** | `limit`: 조회할 최대 트랜잭션 수<br/>`before`: 페이지네이션용 서명<br/>`speed`: 속도 제한 프로필 ('light', 'medium', 'heavy', 'extreme')<br/>`mode`: 컨트랙트 모드 (선택) |
+| **반환값** | dbRootId, partyA, partyB, status, requester, blocker, timestamp를 포함한 연결 객체 배열 |
+
+```typescript
+import { fetchUserConnections } from 'iqlabs-sdk/reader';
+
+// 모든 연결 조회 (모든 앱에서!)
+const connections = await fetchUserConnections(myPubkey, {
+  speed: 'light',  // 6 RPS (기본값)
+  limit: 100
+});
+
+// 앱별 필터링
+const solchatConnections = connections.filter(c => c.dbRootId === 'solchat');
+const zoConnections = connections.filter(c => c.dbRootId === 'zo-trading');
+
+// 상태별 필터링
+const pendingRequests = connections.filter(c => c.status === 'pending');
+const friends = connections.filter(c => c.status === 'approved');
+const blocked = connections.filter(c => c.status === 'blocked');
+
+// 연결 상세 확인
+connections.forEach(conn => {
+  console.log(`앱: ${conn.dbRootId}, ${conn.partyA} <-> ${conn.partyB}, 상태: ${conn.status}`);
+});
+```
+
+---
+
+### 테이블 관리
+
+#### `writeRow()`
+
+| **파라미터** | `connection`: Solana RPC 연결<br/>`signer`: 서명 지갑<br/>`dbRootId`: 데이터베이스 ID<br/>`tableSeed`: 테이블 이름<br/>`rowJson`: JSON 행 데이터 |
+|-------------|--------------------------|
+| **반환값** | 트랜잭션 서명 (string) |
+
+```typescript
+import { writeRow } from 'iqlabs-sdk';
+
+// 첫 번째 행을 작성하여 테이블 생성
+await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
+  id: 1, name: 'Alice', email: 'alice@example.com'
+}));
+
+// 같은 테이블에 다른 행 추가
+await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
+  id: 2, name: 'Bob', email: 'bob@example.com'
+}));
+```
+
+---
+
+#### `readTableRows()`
+
+| **파라미터** | `accountInfo`: 테이블 계정 정보 |
+|-------------|--------------------------|
+| **반환값** | 행 배열 (Row[]) |
+
+```typescript
+import { readTableRows, contract } from 'iqlabs-sdk';
+
+const dbRootPda = contract.pda.getDbRootPda('my-db');
+const tablePda = contract.pda.getTablePda(dbRootPda, 'users');
+const accountInfo = await connection.getAccountInfo(tablePda);
+const rows = readTableRows(accountInfo);
+
+console.log(`총 행 수: ${rows.length}`);
+```
+
+---
+
+#### `getTablelistFromRoot()`
+
+| **파라미터** | `dbRootId`: 데이터베이스 ID |
+|-------------|--------------------------|
+| **반환값** | 테이블 이름 배열 (string[]) |
+
+```typescript
+import { getTablelistFromRoot } from 'iqlabs-sdk';
+
+const tables = await getTablelistFromRoot('my-db');
+console.log('테이블 목록:', tables);
+```
+
+---
+
+#### `fetchInventoryTransactions()`
+
+| **파라미터** | `userPubkey`: 사용자 공개키<br/>`limit`: 최대 개수 (선택) |
+|-------------|--------------------------|
+| **반환값** | 트랜잭션 배열 |
+
+```typescript
+import { fetchInventoryTransactions } from 'iqlabs-sdk';
+
+const myFiles = await fetchInventoryTransactions(myPubkey, 20);
+myFiles.forEach(tx => {
+  let metadata: { data?: unknown } | null = null;
+  try {
+    metadata = JSON.parse(tx.metadata);
+  } catch {
+    metadata = null;
+  }
+
+  if (metadata && metadata.data !== undefined) {
+    const inlineData = typeof metadata.data === 'string'
+      ? metadata.data
+      : JSON.stringify(metadata.data);
+    console.log(`인라인 데이터: ${inlineData}`);
+  } else {
+    console.log(`서명: ${tx.signature}`);
+  }
+});
+```
+
+---
+
+### 환경 설정
+
+#### `setRpcUrl()`
+
+| **파라미터** | `url`: Solana RPC URL |
+|-------------|--------------------------|
+| **반환값** | 없음 (void) |
+
+```typescript
+import { setRpcUrl } from 'iqlabs-sdk';
+
+setRpcUrl('https://your-rpc.example.com');
+```
+
+---
+
+## 추가 리소스
+
+<CardGroup cols={2}>
+  <Card title="GitHub 예제" icon="github" href="https://github.com/IQCoreTeam/IQSdkUsageExampleCliTool">
+    IQLabs SDK를 사용한 완전한 예제 프로젝트를 확인하세요.
+  </Card>
+  <Card title="X (Twitter)" icon="x-twitter" href="https://x.com/IQLabsOfficial">
+    업데이트와 공지사항을 팔로우하세요.
+  </Card>
+</CardGroup>
