@@ -5,11 +5,7 @@
   "colors": {
     "primary": "#00FF00",
     "light": "#00FF00",
-    "dark": "#00CC00",
-    "background": {
-      "light": "#0a0a0a",
-      "dark": "#000000"
-    }
+    "dark": "#00CC00"
   },
   "modeToggle": {
     "default": "dark",
@@ -17,32 +13,10 @@
   },
   "favicon": "/favicon.svg",
   "navigation": {
-    "tabs": [
+    "groups": [
       {
-        "tab": "Documentation",
-        "groups": [
-          {
-            "group": "Getting Started",
-            "pages": [
-              "index",
-              "quickstart",
-              "advanced"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "한국어",
-        "groups": [
-          {
-            "group": "시작하기",
-            "pages": [
-              "ko/index",
-              "ko/quickstart",
-              "ko/advanced"
-            ]
-          }
-        ]
+        "group": "Page",
+        "pages": ["index", "docs", "languages"]
       }
     ],
     "global": {
@@ -61,16 +35,11 @@
     }
   },
   "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "light": "/images/iqlabstitle.png",
+    "dark": "/images/iqlabstitle.png"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "X (Twitter)",
-        "href": "https://x.com/IQLabsOfficial"
-      }
-    ]
+    "links": []
   },
   "footer": {
     "socials": {
