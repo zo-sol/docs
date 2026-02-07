@@ -108,7 +108,7 @@ Una tabla se identifica de forma única por la combinación de `dbRootId` y `tab
 | **Devuelve** | Firma de transacción (string) |
 
 ```typescript
-import { codeIn } from 'iqlabs-sdk';
+import { codeIn } from '@iqlabs-official/solana-sdk';
 
 // Subir un solo archivo
 const signature = await codeIn(connection, signer, 'Hello, blockchain!');
@@ -126,7 +126,7 @@ const multiSig = await codeIn(connection, signer, ['file1.txt', 'file2.txt', 'fi
 | **Devuelve** | Datos almacenados (string) |
 
 ```typescript
-import { readCodeIn } from 'iqlabs-sdk';
+import { readCodeIn } from '@iqlabs-official/solana-sdk';
 
 const data = await readCodeIn('5Xg7...', connection);
 console.log(data); // 'Hello, blockchain!'
@@ -143,7 +143,7 @@ console.log(data); // 'Hello, blockchain!'
 | **Devuelve** | Firma de transacción (string) |
 
 ```typescript
-import { requestConnection } from 'iqlabs-sdk';
+import { requestConnection } from '@iqlabs-official/solana-sdk';
 
 // Enviar una solicitud de amistad
 await requestConnection(
@@ -162,7 +162,7 @@ await requestConnection(
 | **Devuelve** | TransactionInstruction |
 
 ```typescript
-import { contract } from 'iqlabs-sdk';
+import { contract } from '@iqlabs-official/solana-sdk';
 
 // Aprobar una solicitud de amistad
 const approveIx = contract.manageConnectionInstruction(
@@ -188,7 +188,7 @@ const blockIx = contract.manageConnectionInstruction(
 | **Devuelve** | `{ status: 'pending' \| 'approved' \| 'blocked', requester, blocker }` |
 
 ```typescript
-import { readConnection } from 'iqlabs-sdk';
+import { readConnection } from '@iqlabs-official/solana-sdk';
 
 const { status, requester, blocker } = await readConnection('my-db', walletA, walletB);
 console.log(status); // 'pending' | 'approved' | 'blocked'
@@ -203,7 +203,7 @@ console.log(status); // 'pending' | 'approved' | 'blocked'
 | **Devuelve** | Firma de transacción (string) |
 
 ```typescript
-import { writeConnectionRow } from 'iqlabs-sdk';
+import { writeConnectionRow } from '@iqlabs-official/solana-sdk';
 
 await writeConnectionRow(
   connection, signer, 'my-db', connectionSeed,
@@ -223,7 +223,8 @@ Obtiene todas las conexiones (solicitudes de amistad) de un usuario analizando e
 | **Devuelve** | Arreglo de objetos de conexión con dbRootId, partyA, partyB, status, requester, blocker, timestamp |
 
 ```typescript
-import { fetchUserConnections } from 'iqlabs-sdk/reader';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { fetchUserConnections } = iqlabs.reader;
 
 // Obtener todas las conexiones (¡en todas las apps!)
 const connections = await fetchUserConnections(myPubkey, {
@@ -257,7 +258,7 @@ connections.forEach(conn => {
 | **Devuelve** | Firma de transacción (string) |
 
 ```typescript
-import { writeRow } from 'iqlabs-sdk';
+import { writeRow } from '@iqlabs-official/solana-sdk';
 
 // Escribir la primera fila para crear la tabla
 await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
@@ -280,7 +281,7 @@ await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
 | **Returns** | `Array<Record<string, unknown>>` |
 
 ```typescript
-import iqlabs from 'iqlabs-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
 // Basic usage
 const rows = await iqlabs.reader.readTableRows(tablePda, { limit: 50 });
@@ -306,7 +307,7 @@ Collects all (or up to `maxSignatures`) transaction signatures for an account. L
 | **Returns** | `string[]` (signature strings) |
 
 ```typescript
-import iqlabs from 'iqlabs-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
 // Collect all signatures
 const allSigs = await iqlabs.reader.collectSignatures(tablePda);
@@ -329,7 +330,7 @@ const rows = await iqlabs.reader.readTableRows(tablePda, { signatures: chunk });
 | **Devuelve** | Arreglo de nombres de tabla (string[]) |
 
 ```typescript
-import { getTablelistFromRoot } from 'iqlabs-sdk';
+import { getTablelistFromRoot } from '@iqlabs-official/solana-sdk';
 
 const tables = await getTablelistFromRoot('my-db');
 console.log('Table list:', tables);
@@ -344,7 +345,7 @@ console.log('Table list:', tables);
 | **Devuelve** | Arreglo de transacciones |
 
 ```typescript
-import { fetchInventoryTransactions } from 'iqlabs-sdk';
+import { fetchInventoryTransactions } from '@iqlabs-official/solana-sdk';
 
 const myFiles = await fetchInventoryTransactions(myPubkey, 20);
 myFiles.forEach(tx => {
@@ -377,7 +378,7 @@ myFiles.forEach(tx => {
 | **Devuelve** | Ninguno (void) |
 
 ```typescript
-import { setRpcUrl } from 'iqlabs-sdk';
+import { setRpcUrl } from '@iqlabs-official/solana-sdk';
 
 setRpcUrl('https://your-rpc.example.com');
 ```
@@ -401,7 +402,8 @@ Función de bajo nivel para gestionar datos de filas en tablas.
 | **Caso de uso** | Gestión de filas personalizada, operaciones por lotes |
 
 ```typescript
-import { manageRowData } from 'iqlabs-sdk/writer';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { manageRowData } = iqlabs.writer;
 
 await manageRowData(connection, signer, {
   dbRootId: 'my-db',
@@ -424,7 +426,8 @@ Lee el PDA UserState de un usuario.
 | **Caso de uso** | Obtener datos de perfil, comprobar conteos de subida |
 
 ```typescript
-import { readUserState } from 'iqlabs-sdk/reader';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { readUserState } = iqlabs.reader;
 
 const userState = await readUserState(userPubkey);
 console.log('Profile:', userState.profile);
@@ -442,7 +445,8 @@ Lee los metadatos asociados al inventario del usuario (archivos subidos).
 | **Caso de uso** | Listar archivos del usuario con metadatos, gestión de archivos |
 
 ```typescript
-import { readInventoryMetadata } from 'iqlabs-sdk/reader';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { readInventoryMetadata } = iqlabs.reader;
 
 const metadata = await readInventoryMetadata(userPubkey);
 metadata.forEach(item => {
@@ -461,7 +465,8 @@ Recupera una lista de PDAs de sesión.
 | **Caso de uso** | Gestión de sesiones, seguimiento de sesiones activas |
 
 ```typescript
-import { getSessionPdaList } from 'iqlabs-sdk/reader';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { getSessionPdaList } = iqlabs.reader;
 
 const sessions = await getSessionPdaList(userPubkey);
 sessions.forEach(session => {
@@ -482,7 +487,8 @@ Deriva una semilla determinista para mensajería directa (DM) entre dos usuarios
 | **Caso de uso** | Crear identificadores de conexión consistentes, configuración de canal DM |
 
 ```typescript
-import { deriveDmSeed } from 'iqlabs-sdk/utils';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { deriveDmSeed } = iqlabs.utils;
 
 const seed1 = deriveDmSeed(walletA, walletB);
 const seed2 = deriveDmSeed(walletB, walletA);
@@ -500,7 +506,8 @@ Convierte una semilla de cadena al formato de bytes requerido para derivación d
 | **Caso de uso** | Derivación de PDA personalizada, manipulación de semillas de bajo nivel |
 
 ```typescript
-import { toSeedBytes } from 'iqlabs-sdk/utils';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { toSeedBytes } = iqlabs.utils;
 
 const seedString = 'my-custom-seed';
 const seedBytes = toSeedBytes(seedString);

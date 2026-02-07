@@ -108,7 +108,7 @@ IQLabs SDK를 사용하기 전에 알아야 할 주요 개념들입니다.
 | **반환값** | 트랜잭션 서명 (string) |
 
 ```typescript
-import { codeIn } from 'iqlabs-sdk';
+import { codeIn } from '@iqlabs-official/solana-sdk';
 
 // 단일 파일 업로드
 const signature = await codeIn(connection, signer, 'Hello, blockchain!');
@@ -126,7 +126,7 @@ const multiSig = await codeIn(connection, signer, ['file1.txt', 'file2.txt', 'fi
 | **반환값** | 저장된 데이터 (string) |
 
 ```typescript
-import { readCodeIn } from 'iqlabs-sdk';
+import { readCodeIn } from '@iqlabs-official/solana-sdk';
 
 const data = await readCodeIn('5Xg7...', connection);
 console.log(data); // 'Hello, blockchain!'
@@ -143,7 +143,7 @@ console.log(data); // 'Hello, blockchain!'
 | **반환값** | 트랜잭션 서명 (string) |
 
 ```typescript
-import { requestConnection } from 'iqlabs-sdk';
+import { requestConnection } from '@iqlabs-official/solana-sdk';
 
 await requestConnection(
   connection, signer, 'my-db',
@@ -161,7 +161,7 @@ await requestConnection(
 | **반환값** | TransactionInstruction |
 
 ```typescript
-import { contract } from 'iqlabs-sdk';
+import { contract } from '@iqlabs-official/solana-sdk';
 
 // 친구 요청 승인
 const approveIx = contract.manageConnectionInstruction(
@@ -187,7 +187,7 @@ const blockIx = contract.manageConnectionInstruction(
 | **반환값** | `{ status: 'pending' \| 'approved' \| 'blocked', requester, blocker }` |
 
 ```typescript
-import { readConnection } from 'iqlabs-sdk';
+import { readConnection } from '@iqlabs-official/solana-sdk';
 
 const { status, requester, blocker } = await readConnection('my-db', walletA, walletB);
 console.log(status); // 'pending' | 'approved' | 'blocked'
@@ -202,7 +202,7 @@ console.log(status); // 'pending' | 'approved' | 'blocked'
 | **반환값** | 트랜잭션 서명 (string) |
 
 ```typescript
-import { writeConnectionRow } from 'iqlabs-sdk';
+import { writeConnectionRow } from '@iqlabs-official/solana-sdk';
 
 await writeConnectionRow(
   connection, signer, 'my-db', connectionSeed,
@@ -222,7 +222,8 @@ await writeConnectionRow(
 | **반환값** | dbRootId, partyA, partyB, status, requester, blocker, timestamp를 포함한 연결 객체 배열 |
 
 ```typescript
-import { fetchUserConnections } from 'iqlabs-sdk/reader';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { fetchUserConnections } = iqlabs.reader;
 
 // 모든 연결 조회 (모든 앱에서!)
 const connections = await fetchUserConnections(myPubkey, {
@@ -256,7 +257,7 @@ connections.forEach(conn => {
 | **반환값** | 트랜잭션 서명 (string) |
 
 ```typescript
-import { writeRow } from 'iqlabs-sdk';
+import { writeRow } from '@iqlabs-official/solana-sdk';
 
 // 첫 번째 행을 작성하여 테이블 생성
 await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
@@ -279,7 +280,7 @@ await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
 | **반환값** | `Array<Record<string, unknown>>` |
 
 ```typescript
-import iqlabs from 'iqlabs-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
 // 기본 사용
 const rows = await iqlabs.reader.readTableRows(tablePda, { limit: 50 });
@@ -305,7 +306,7 @@ const rows = await iqlabs.reader.readTableRows(tablePda, { signatures: slice });
 | **반환값** | `string[]` (시그니처 문자열) |
 
 ```typescript
-import iqlabs from 'iqlabs-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
 // 모든 시그니처 수집
 const allSigs = await iqlabs.reader.collectSignatures(tablePda);
@@ -328,7 +329,7 @@ const rows = await iqlabs.reader.readTableRows(tablePda, { signatures: chunk });
 | **반환값** | 테이블 이름 배열 (string[]) |
 
 ```typescript
-import { getTablelistFromRoot } from 'iqlabs-sdk';
+import { getTablelistFromRoot } from '@iqlabs-official/solana-sdk';
 
 const tables = await getTablelistFromRoot('my-db');
 console.log('테이블 목록:', tables);
@@ -343,7 +344,7 @@ console.log('테이블 목록:', tables);
 | **반환값** | 트랜잭션 배열 |
 
 ```typescript
-import { fetchInventoryTransactions } from 'iqlabs-sdk';
+import { fetchInventoryTransactions } from '@iqlabs-official/solana-sdk';
 
 const myFiles = await fetchInventoryTransactions(myPubkey, 20);
 myFiles.forEach(tx => {
@@ -376,7 +377,7 @@ myFiles.forEach(tx => {
 | **반환값** | 없음 (void) |
 
 ```typescript
-import { setRpcUrl } from 'iqlabs-sdk';
+import { setRpcUrl } from '@iqlabs-official/solana-sdk';
 
 setRpcUrl('https://your-rpc.example.com');
 ```
@@ -400,7 +401,8 @@ setRpcUrl('https://your-rpc.example.com');
 | **사용 사례** | 커스텀 행 관리, 배치 작업 |
 
 ```typescript
-import { manageRowData } from 'iqlabs-sdk/writer';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { manageRowData } = iqlabs.writer;
 
 await manageRowData(connection, signer, {
   dbRootId: 'my-db',
@@ -423,7 +425,8 @@ await manageRowData(connection, signer, {
 | **사용 사례** | 사용자 프로필 데이터 조회, 업로드 수 확인 |
 
 ```typescript
-import { readUserState } from 'iqlabs-sdk/reader';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { readUserState } = iqlabs.reader;
 
 const userState = await readUserState(userPubkey);
 console.log('프로필:', userState.profile);
@@ -441,7 +444,8 @@ console.log('업로드 수:', userState.fileCount);
 | **사용 사례** | 메타데이터와 함께 사용자 파일 목록 조회, 파일 관리 |
 
 ```typescript
-import { readInventoryMetadata } from 'iqlabs-sdk/reader';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { readInventoryMetadata } = iqlabs.reader;
 
 const metadata = await readInventoryMetadata(userPubkey);
 metadata.forEach(item => {
@@ -460,7 +464,8 @@ metadata.forEach(item => {
 | **사용 사례** | 세션 관리, 활성 세션 추적 |
 
 ```typescript
-import { getSessionPdaList } from 'iqlabs-sdk/reader';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { getSessionPdaList } = iqlabs.reader;
 
 const sessions = await getSessionPdaList(userPubkey);
 sessions.forEach(session => {
@@ -481,7 +486,8 @@ sessions.forEach(session => {
 | **사용 사례** | 일관된 연결 식별자 생성, DM 채널 설정 |
 
 ```typescript
-import { deriveDmSeed } from 'iqlabs-sdk/utils';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { deriveDmSeed } = iqlabs.utils;
 
 const seed1 = deriveDmSeed(walletA, walletB);
 const seed2 = deriveDmSeed(walletB, walletA);
@@ -499,7 +505,8 @@ console.log(seed1 === seed2); // true
 | **사용 사례** | 커스텀 PDA 도출, 저수준 시드 조작 |
 
 ```typescript
-import { toSeedBytes } from 'iqlabs-sdk/utils';
+import iqlabs from '@iqlabs-official/solana-sdk';
+const { toSeedBytes } = iqlabs.utils;
 
 const seedString = 'my-custom-seed';
 const seedBytes = toSeedBytes(seedString);
