@@ -273,19 +273,50 @@ await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
 
 #### `readTableRows()`
 
-| **파라미터** | `accountInfo`: 테이블 계정 정보 |
+| **파라미터** | `account`: 테이블 PDA (PublicKey 또는 string)<br/>`options`: 선택적 설정 |
 |-------------|--------------------------|
-| **반환값** | 행 배열 (Row[]) |
+| **옵션** | `limit`: 가져올 최대 행 수<br/>`before`: 페이지네이션용 시그니처 커서<br/>`signatures`: 미리 수집한 시그니처 배열 (제공 시 RPC 조회 생략)<br/>`speed`: 속도 제한 프로필 ('light', 'medium', 'heavy', 'extreme') |
+| **반환값** | `Array<Record<string, unknown>>` |
 
 ```typescript
-import { readTableRows, contract } from 'iqlabs-sdk';
+import iqlabs from 'iqlabs-sdk';
 
-const dbRootPda = contract.pda.getDbRootPda('my-db');
-const tablePda = contract.pda.getTablePda(dbRootPda, 'users');
-const accountInfo = await connection.getAccountInfo(tablePda);
-const rows = readTableRows(accountInfo);
+// 기본 사용
+const rows = await iqlabs.reader.readTableRows(tablePda, { limit: 50 });
 
-console.log(`총 행 수: ${rows.length}`);
+// 커서 기반 페이지네이션
+const olderRows = await iqlabs.reader.readTableRows(tablePda, { limit: 50, before: 'sig...' });
+
+// 미리 수집한 시그니처로 사용 (시그니처 조회 생략, 바로 디코딩)
+const sigs = await iqlabs.reader.collectSignatures(tablePda);
+const targetIdx = sigs.indexOf('abc123');
+const slice = sigs.slice(targetIdx - 25, targetIdx + 25);
+const rows = await iqlabs.reader.readTableRows(tablePda, { signatures: slice });
+```
+
+---
+
+#### `collectSignatures()`
+
+계정의 모든 (또는 `maxSignatures`개까지의) 트랜잭션 시그니처를 수집합니다. 가볍게 동작 — 트랜잭션 디코딩 없이 시그니처 문자열만 수집. 페이지네이션에 유용: 전체 시그니처 목록을 한 번 가져온 후 슬라이스하여 `readTableRows()`에 전달.
+
+| **파라미터** | `account`: 테이블 PDA (PublicKey 또는 string)<br/>`maxSignatures`: 수집할 최대 시그니처 수 (선택, 생략 시 전체 수집) |
+|-------------|--------------------------|
+| **반환값** | `string[]` (시그니처 문자열) |
+
+```typescript
+import iqlabs from 'iqlabs-sdk';
+
+// 모든 시그니처 수집
+const allSigs = await iqlabs.reader.collectSignatures(tablePda);
+
+// 최대 3000개 시그니처 수집
+const sigs = await iqlabs.reader.collectSignatures(tablePda, 3000);
+
+// readTableRows와 함께 중간부터 읽기
+const targetIdx = sigs.indexOf('abc123');
+const chunk = sigs.slice(targetIdx - 25, targetIdx + 25);
+const rows = await iqlabs.reader.readTableRows(tablePda, { signatures: chunk });
 ```
 
 ---
@@ -415,29 +446,6 @@ import { readInventoryMetadata } from 'iqlabs-sdk/reader';
 const metadata = await readInventoryMetadata(userPubkey);
 metadata.forEach(item => {
   console.log(`파일: ${item.name}, 크기: ${item.size}, 서명: ${item.signature}`);
-});
-```
-
----
-
-#### `fetchAccountTransactions()`
-
-특정 계정의 모든 트랜잭션을 조회합니다.
-
-| **모듈** | `reader` |
-|----------|----------|
-| **사용 사례** | 트랜잭션 히스토리, 계정 분석, 디버깅 |
-
-```typescript
-import { fetchAccountTransactions } from 'iqlabs-sdk/reader';
-
-const transactions = await fetchAccountTransactions(accountPubkey, {
-  limit: 50,
-  before: lastSignature
-});
-
-transactions.forEach(tx => {
-  console.log(`서명: ${tx.signature}, 블록: ${tx.slot}`);
 });
 ```
 

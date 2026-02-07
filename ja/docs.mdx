@@ -274,19 +274,50 @@ await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
 
 #### `readTableRows()`
 
-| **パラメータ** | `accountInfo`：テーブルアカウント情報 |
+| **Parameters** | `account`: table PDA (PublicKey or string)<br/>`options`: optional settings |
 |----------------|--------------------------|
-| **戻り値** | 行配列（Row[]） |
+| **Options** | `limit`: max number of rows to fetch<br/>`before`: signature cursor for pagination<br/>`signatures`: pre-collected signature array (skips RPC fetch if provided)<br/>`speed`: rate limit profile ('light', 'medium', 'heavy', 'extreme') |
+| **Returns** | `Array<Record<string, unknown>>` |
 
 ```typescript
-import { readTableRows, contract } from 'iqlabs-sdk';
+import iqlabs from 'iqlabs-sdk';
 
-const dbRootPda = contract.pda.getDbRootPda('my-db');
-const tablePda = contract.pda.getTablePda(dbRootPda, 'users');
-const accountInfo = await connection.getAccountInfo(tablePda);
-const rows = readTableRows(accountInfo);
+// Basic usage
+const rows = await iqlabs.reader.readTableRows(tablePda, { limit: 50 });
 
-console.log(`Total rows: ${rows.length}`);
+// Cursor-based pagination
+const olderRows = await iqlabs.reader.readTableRows(tablePda, { limit: 50, before: 'sig...' });
+
+// With pre-collected signatures (skips signature fetching, decodes directly)
+const sigs = await iqlabs.reader.collectSignatures(tablePda);
+const targetIdx = sigs.indexOf('abc123');
+const slice = sigs.slice(targetIdx - 25, targetIdx + 25);
+const rows = await iqlabs.reader.readTableRows(tablePda, { signatures: slice });
+```
+
+---
+
+#### `collectSignatures()`
+
+Collects all (or up to `maxSignatures`) transaction signatures for an account. Lightweight — no transaction decoding, only signature strings. Useful for pagination: fetch the full signature list once, then slice and pass to `readTableRows()`.
+
+| **Parameters** | `account`: table PDA (PublicKey or string)<br/>`maxSignatures`: max number of signatures to collect (optional, fetches all if omitted) |
+|----------------|--------------------------|
+| **Returns** | `string[]` (signature strings) |
+
+```typescript
+import iqlabs from 'iqlabs-sdk';
+
+// Collect all signatures
+const allSigs = await iqlabs.reader.collectSignatures(tablePda);
+
+// Collect up to 3000 signatures
+const sigs = await iqlabs.reader.collectSignatures(tablePda, 3000);
+
+// Use with readTableRows to read from the middle
+const targetIdx = sigs.indexOf('abc123');
+const chunk = sigs.slice(targetIdx - 25, targetIdx + 25);
+const rows = await iqlabs.reader.readTableRows(tablePda, { signatures: chunk });
 ```
 
 ---
@@ -416,29 +447,6 @@ import { readInventoryMetadata } from 'iqlabs-sdk/reader';
 const metadata = await readInventoryMetadata(userPubkey);
 metadata.forEach(item => {
   console.log(`File: ${item.name}, Size: ${item.size}, Signature: ${item.signature}`);
-});
-```
-
----
-
-#### `fetchAccountTransactions()`
-
-特定のアカウントのすべてのトランザクションを取得します。
-
-| **モジュール** | `reader` |
-|------------|----------|
-| **用途** | トランザクション履歴、アカウント分析、デバッグ |
-
-```typescript
-import { fetchAccountTransactions } from 'iqlabs-sdk/reader';
-
-const transactions = await fetchAccountTransactions(accountPubkey, {
-  limit: 50,
-  before: lastSignature
-});
-
-transactions.forEach(tx => {
-  console.log(`Signature: ${tx.signature}, Block: ${tx.slot}`);
 });
 ```
 
