@@ -1,0 +1,521 @@
+---
+title: "Developer Docs (Python)"
+description: "Core concepts and functions for the IQLabs Python SDK"
+---
+
+<Note>
+This document is in progress and will be refined.
+</Note>
+
+## Installation
+
+```bash
+pip install iqlabs-solana-sdk
+```
+
+---
+
+## Core Concepts
+
+These are the key concepts to know before using the IQLabs SDK.
+
+---
+
+### Data Storage (Code In)
+
+This is how you store any data (files, text, JSON) on-chain.
+
+#### How is it stored?
+
+Depending on data size, the SDK picks the optimal method:
+
+- **Small data (&lt; 850 bytes)**: store immediately, fastest
+- **Medium data (&lt; 8.5 KB)**: split into multiple transactions
+- **Large data (&gt;= 8.5 KB)**: upload in parallel for speed
+
+#### Key related functions
+
+- [`code_in()`](#code_in): upload data and get a transaction ID
+- [`read_code_in()`](#read_code_in): read data back from a transaction ID
+
+---
+
+### User State PDA
+
+An on-chain profile account for a user.
+
+#### What gets stored?
+
+- Profile info (name, profile picture, bio, etc.)
+- Number of uploaded files
+- Friend request records
+
+<Note>
+Friend requests are not stored as values in the PDA; they are sent as transactions.
+</Note>
+
+#### When is it created?
+
+It is created automatically the first time you call [`code_in()`](#code_in). No extra setup is required, but the first user may need to sign twice.
+
+---
+
+### Connection PDA
+
+An on-chain account that manages relationships between two users (friends, messages, etc.).
+
+#### What states can it have?
+
+- **pending**: a friend request was sent but not accepted yet
+- **approved**: the request was accepted and the users are connected
+- **blocked**: one side blocked the other
+
+<Warning>
+A blocked connection can only be unblocked by the blocker.
+</Warning>
+
+#### Key related functions
+
+- [`request_connection()`](#request_connection): send a friend request (creates pending)
+- [`manage_connection()`](#manage_connection): approve/reject/block/unblock a request
+- [`read_connection()`](#read_connection): check current relationship status
+- [`write_connection_row()`](#write_connection_row): exchange messages/data with a connected friend
+- [`fetch_user_connections()`](#fetch_user_connections): fetch all connections (sent & received friend requests)
+
+---
+
+### Database Tables
+
+Store JSON data in tables like a database.
+
+#### How are tables created?
+
+There is no dedicated "create table" function. The first write via [`write_row()`](#write_row) creates the table automatically.
+
+<Note>
+A table is uniquely identified by the combination of `db_root_id` and `table_seed` (table name).
+</Note>
+
+#### Key related functions
+
+- [`write_row()`](#write_row): add a new row (creates the table if missing)
+- [`read_table_rows()`](#read_table_rows): read rows from a table
+- [`get_tablelist_from_root()`](#get_tablelist_from_root): list all tables in a database
+- [`fetch_inventory_transactions()`](#fetch_inventory_transactions): list uploaded files
+
+---
+
+## Function Details
+
+### Data Storage and Retrieval
+
+#### `code_in()`
+
+| **Parameters** | `connection`: Solana RPC AsyncClient<br/>`signer`: Keypair<br/>`data`: data to upload (str or list[str])<br/>`mode`: contract mode (default: 'anchor') |
+|----------------|--------------------------|
+| **Returns** | Transaction signature (str) |
+
+```python
+from iqlabs import writer
+from solana.rpc.async_api import AsyncClient
+from solders.keypair import Keypair
+
+# Upload a single file
+signature = await writer.code_in(connection, signer, 'Hello, blockchain!')
+
+# Upload multiple files
+multi_sig = await writer.code_in(connection, signer, ['file1.txt', 'file2.txt', 'file3.txt'])
+```
+
+---
+
+#### `read_code_in()`
+
+| **Parameters** | `tx_signature`: transaction signature (str)<br/>`connection`: (optional) AsyncClient |
+|----------------|--------------------------|
+| **Returns** | Stored data (str) |
+
+```python
+from iqlabs import reader
+
+data = await reader.read_code_in('5Xg7...', connection)
+print(data)  # 'Hello, blockchain!'
+```
+
+---
+
+### Connection Management
+
+#### `request_connection()`
+
+| **Parameters** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: database ID<br/>`party_a`, `party_b`: the two users to connect<br/>`table_name`: connection table name<br/>`columns`: column list<br/>`id_col`: ID column<br/>`ext_keys`: extension keys |
+|----------------|--------------------------|
+| **Returns** | Transaction signature (str) |
+
+```python
+from iqlabs import writer
+from solders.pubkey import Pubkey
+
+await writer.request_connection(
+    connection, signer, 'my-db',
+    my_wallet_address, friend_wallet_address,
+    'dm_table', ['message', 'timestamp'], 'message_id', []
+)
+```
+
+---
+
+#### `manage_connection()`
+
+| **Parameters** | `builder`: InstructionBuilder<br/>`accounts`: dict with `db_root`, `connection_table`, `signer`<br/>`args`: dict with `db_root_id`, `connection_seed`, `new_status` |
+|----------------|--------------------------|
+| **Returns** | TransactionInstruction |
+
+```python
+from iqlabs import contract
+from iqlabs.contract.constants import CONNECTION_STATUS_APPROVED, CONNECTION_STATUS_BLOCKED
+
+# Approve a friend request
+approve_ix = contract.manage_connection_instruction(
+    builder,
+    {"db_root": db_root, "connection_table": connection_table, "signer": my_pubkey},
+    {"db_root_id": db_root_id, "connection_seed": connection_seed, "new_status": CONNECTION_STATUS_APPROVED}
+)
+
+# Block a user
+block_ix = contract.manage_connection_instruction(
+    builder,
+    {"db_root": db_root, "connection_table": connection_table, "signer": my_pubkey},
+    {"db_root_id": db_root_id, "connection_seed": connection_seed, "new_status": CONNECTION_STATUS_BLOCKED}
+)
+```
+
+---
+
+#### `read_connection()`
+
+| **Parameters** | `db_root_id`: database ID<br/>`wallet_a`, `wallet_b`: the two wallets to check |
+|----------------|--------------------------|
+| **Returns** | dict with `status`, `requester`, `blocker` |
+
+```python
+from iqlabs import reader
+
+conn_info = await reader.read_connection('my-db', wallet_a, wallet_b)
+print(conn_info['status'])  # 'pending' | 'approved' | 'blocked'
+```
+
+---
+
+#### `write_connection_row()`
+
+| **Parameters** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: database ID<br/>`connection_seed`: connection seed<br/>`row_json`: JSON data (str) |
+|----------------|--------------------------|
+| **Returns** | Transaction signature (str) |
+
+```python
+from iqlabs import writer
+import json
+
+await writer.write_connection_row(
+    connection, signer, 'my-db', connection_seed,
+    json.dumps({"message_id": "123", "message": "Hello friend!", "timestamp": 1234567890})
+)
+```
+
+---
+
+#### `fetch_user_connections()`
+
+Fetch all connections (friend requests) for a user by analyzing their UserState PDA transaction history. Each connection includes its `db_root_id`, identifying which app the connection belongs to.
+
+| **Parameters** | `user_pubkey`: user public key (str or Pubkey)<br/>`options`: optional settings dict |
+|----------------|--------------------------|
+| **Options** | `limit`: max number of transactions to fetch<br/>`before`: signature to paginate from<br/>`speed`: rate limit profile ('light', 'medium', 'heavy', 'extreme')<br/>`mode`: contract mode (optional) |
+| **Returns** | List of connection dicts with db_root_id, party_a, party_b, status, requester, blocker, timestamp |
+
+```python
+from iqlabs import reader
+
+# Fetch all connections (across all apps!)
+connections = await reader.fetch_user_connections(my_pubkey, {
+    "speed": "light",  # 6 RPS (default)
+    "limit": 100
+})
+
+# Filter by app
+solchat_connections = [c for c in connections if c['db_root_id'] == 'solchat']
+zo_connections = [c for c in connections if c['db_root_id'] == 'zo-trading']
+
+# Filter by status
+pending_requests = [c for c in connections if c['status'] == 'pending']
+friends = [c for c in connections if c['status'] == 'approved']
+blocked = [c for c in connections if c['status'] == 'blocked']
+
+# Check connection details
+for conn in connections:
+    print(f"App: {conn['db_root_id']}, {conn['party_a']} <-> {conn['party_b']}, status: {conn['status']}")
+```
+
+---
+
+### Table Management
+
+#### `write_row()`
+
+| **Parameters** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: database ID<br/>`table_seed`: table name<br/>`row_json`: JSON row data (str) |
+|----------------|--------------------------|
+| **Returns** | Transaction signature (str) |
+
+```python
+from iqlabs import writer
+import json
+
+# Write the first row to create the table
+await writer.write_row(connection, signer, 'my-db', 'users', json.dumps({
+    "id": 1, "name": "Alice", "email": "alice@example.com"
+}))
+
+# Add another row to the same table
+await writer.write_row(connection, signer, 'my-db', 'users', json.dumps({
+    "id": 2, "name": "Bob", "email": "bob@example.com"
+}))
+```
+
+---
+
+#### `read_table_rows()`
+
+| **Parameters** | `account`: table PDA (Pubkey or str)<br/>`options`: optional settings dict |
+|----------------|--------------------------|
+| **Options** | `limit`: max number of rows to fetch<br/>`before`: signature cursor for pagination<br/>`signatures`: pre-collected signature list (skips RPC fetch if provided)<br/>`speed`: rate limit profile ('light', 'medium', 'heavy', 'extreme') |
+| **Returns** | `list[dict]` |
+
+```python
+from iqlabs import reader
+
+# Basic usage
+rows = await reader.read_table_rows(table_pda, {"limit": 50})
+
+# Cursor-based pagination
+older_rows = await reader.read_table_rows(table_pda, {"limit": 50, "before": "sig..."})
+
+# With pre-collected signatures (skips signature fetching, decodes directly)
+sigs = await reader.collect_signatures(table_pda)
+target_idx = sigs.index('abc123')
+slice_sigs = sigs[target_idx - 25:target_idx + 25]
+rows = await reader.read_table_rows(table_pda, {"signatures": slice_sigs})
+```
+
+---
+
+#### `collect_signatures()`
+
+Collects all (or up to `max_signatures`) transaction signatures for an account. Lightweight — no transaction decoding, only signature strings. Useful for pagination: fetch the full signature list once, then slice and pass to `read_table_rows()`.
+
+| **Parameters** | `account`: table PDA (Pubkey or str)<br/>`max_signatures`: max number of signatures to collect (optional, fetches all if omitted) |
+|----------------|--------------------------|
+| **Returns** | `list[str]` (signature strings) |
+
+```python
+from iqlabs import reader
+
+# Collect all signatures
+all_sigs = await reader.collect_signatures(table_pda)
+
+# Collect up to 3000 signatures
+sigs = await reader.collect_signatures(table_pda, 3000)
+
+# Use with read_table_rows to read from the middle
+target_idx = sigs.index('abc123')
+chunk = sigs[target_idx - 25:target_idx + 25]
+rows = await reader.read_table_rows(table_pda, {"signatures": chunk})
+```
+
+---
+
+#### `get_tablelist_from_root()`
+
+| **Parameters** | `db_root_id`: database ID (str) |
+|----------------|--------------------------|
+| **Returns** | Table name list (list[str]) |
+
+```python
+from iqlabs import reader
+
+tables = await reader.get_tablelist_from_root('my-db')
+print('Table list:', tables)
+```
+
+---
+
+#### `fetch_inventory_transactions()`
+
+| **Parameters** | `user_pubkey`: user public key (Pubkey or str)<br/>`limit`: max count (optional) |
+|----------------|--------------------------|
+| **Returns** | Transaction list |
+
+```python
+from iqlabs import reader
+import json
+
+my_files = await reader.fetch_inventory_transactions(my_pubkey, 20)
+for tx in my_files:
+    metadata = None
+    try:
+        metadata = json.loads(tx['metadata'])
+    except:
+        metadata = None
+
+    if metadata and 'data' in metadata:
+        inline_data = metadata['data'] if isinstance(metadata['data'], str) else json.dumps(metadata['data'])
+        print(f"Inline data: {inline_data}")
+    else:
+        print(f"Signature: {tx['signature']}")
+```
+
+---
+
+### Environment Settings
+
+#### `set_rpc_url()`
+
+| **Parameters** | `url`: Solana RPC URL (str) |
+|----------------|--------------------------|
+| **Returns** | None |
+
+```python
+from iqlabs import set_rpc_url
+
+set_rpc_url('https://your-rpc.example.com')
+```
+
+---
+
+## Advanced Functions
+
+<Warning>
+These are low-level SDK functions. Not needed for typical usage, but useful when building custom features or debugging.
+</Warning>
+
+### Writer Functions
+
+#### `manage_row_data()`
+
+Low-level function for managing row data in tables.
+
+| **Module** | `writer` |
+|------------|----------|
+| **Use Case** | Custom row management, batch operations |
+
+```python
+from iqlabs import writer
+
+await writer.manage_row_data(connection, signer, {
+    "db_root_id": 'my-db',
+    "table_seed": 'users',
+    "operation": 'update',
+    "row_data": json.dumps({"id": 1, "name": "Updated Name"})
+})
+```
+
+---
+
+### Reader Functions
+
+#### `read_user_state()`
+
+Reads the UserState PDA for a given user.
+
+| **Module** | `reader` |
+|------------|----------|
+| **Use Case** | Fetching user profile data, checking upload counts |
+
+```python
+from iqlabs import reader
+
+user_state = await reader.read_user_state(user_pubkey)
+print('Profile:', user_state['profile'])
+print('Upload count:', user_state['file_count'])
+```
+
+---
+
+#### `read_inventory_metadata()`
+
+Reads metadata associated with a user's inventory (uploaded files).
+
+| **Module** | `reader` |
+|------------|----------|
+| **Use Case** | Listing user files with metadata, file management |
+
+```python
+from iqlabs import reader
+
+metadata = await reader.read_inventory_metadata(user_pubkey)
+for item in metadata:
+    print(f"File: {item['name']}, Size: {item['size']}, Signature: {item['signature']}")
+```
+
+---
+
+#### `get_session_pda_list()`
+
+Retrieves a list of session PDAs.
+
+| **Module** | `reader` |
+|------------|----------|
+| **Use Case** | Session management, active session tracking |
+
+```python
+from iqlabs import reader
+
+sessions = await reader.get_session_pda_list(user_pubkey)
+for session in sessions:
+    print(f"Session PDA: {session['pda']}, Active: {session['is_active']}")
+```
+
+---
+
+### Utility Functions
+
+#### `derive_dm_seed()`
+
+Derives a deterministic seed for direct messaging (DM) between two users.
+
+| **Module** | `utils` / `reader` |
+|------------|----------|
+| **Use Case** | Creating consistent connection identifiers, DM channel setup |
+
+```python
+from iqlabs.sdk.utils.seed import derive_dm_seed
+
+seed1 = derive_dm_seed(wallet_a, wallet_b)
+seed2 = derive_dm_seed(wallet_b, wallet_a)
+print(seed1 == seed2)  # True
+```
+
+---
+
+#### `to_seed_bytes()`
+
+Converts a string seed to the byte format required for PDA derivation.
+
+| **Module** | `utils` |
+|------------|----------|
+| **Use Case** | Custom PDA derivation, low-level seed manipulation |
+
+```python
+from iqlabs.sdk.utils.seed import to_seed_bytes
+from solders.pubkey import Pubkey
+
+seed_string = 'my-custom-seed'
+seed_bytes = to_seed_bytes(seed_string)
+
+pda, bump = Pubkey.find_program_address(
+    [seed_bytes, other_seed],
+    program_id
+)
+```
+
+---

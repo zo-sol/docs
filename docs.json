@@ -16,7 +16,7 @@
     "groups": [
       {
         "group": "Page",
-        "pages": ["index", "docs", "languages"]
+        "pages": ["index", "docs-typescript", "docs-python", "languages"]
       }
     ],
     "global": {
