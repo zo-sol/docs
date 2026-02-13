@@ -111,33 +111,41 @@ A table is uniquely identified by the combination of `dbRootId` and `tableSeed` 
 
 #### `codeIn()`
 
-| **Parameters** | `connection`: Solana RPC connection<br/>`signer`: signing wallet<br/>`data`: data to upload (single string or array)<br/>`mode`: contract mode (default: 'anchor') |
+| **Parameters** | `input`: `{ connection, signer }` object<br/>`data`: data to upload (string or string[])<br/>`filename`: optional filename (string)<br/>`method`: upload method (number, default: 0)<br/>`filetype`: file type hint (string, default: '')<br/>`onProgress`: optional progress callback `(percent: number) => void` |
 |----------------|--------------------------|
 | **Returns** | Transaction signature (string) |
 
 ```typescript
-import { codeIn } from '@iqlabs-official/solana-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
-// Upload a single file
-const signature = await codeIn(connection, signer, 'Hello, blockchain!');
+// Upload data
+const signature = await iqlabs.writer.codeIn(
+  { connection, signer },
+  'Hello, blockchain!'
+);
 
-// Upload multiple files
-const multiSig = await codeIn(connection, signer, ['file1.txt', 'file2.txt', 'file3.txt']);
+// Upload with filename
+const sig = await iqlabs.writer.codeIn(
+  { connection, signer },
+  'file contents here',
+  'hello.txt'
+);
 ```
 
 ---
 
 #### `readCodeIn()`
 
-| **Parameters** | `txSignature`: transaction signature<br/>`connection`: (optional) Solana RPC connection |
+| **Parameters** | `txSignature`: transaction signature (string)<br/>`speed`: rate limit profile (optional, 'light' \| 'medium' \| 'heavy' \| 'extreme')<br/>`onProgress`: optional progress callback `(percent: number) => void` |
 |----------------|--------------------------|
-| **Returns** | Stored data (string) |
+| **Returns** | `{ metadata: string, data: string \| null }` |
 
 ```typescript
-import { readCodeIn } from '@iqlabs-official/solana-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
-const data = await readCodeIn('5Xg7...', connection);
-console.log(data); // 'Hello, blockchain!'
+const result = await iqlabs.reader.readCodeIn('5Xg7...');
+console.log(result.data);      // 'Hello, blockchain!'
+console.log(result.metadata);  // JSON string with file metadata
 ```
 
 ---
@@ -146,14 +154,14 @@ console.log(data); // 'Hello, blockchain!'
 
 #### `requestConnection()`
 
-| **Parameters** | `connection`: Solana RPC connection<br/>`signer`: signing wallet<br/>`dbRootId`: database ID<br/>`partyA`, `partyB`: the two users to connect<br/>`tableName`: connection table name<br/>`columns`: column list<br/>`idCol`: ID column<br/>`extKeys`: extension keys |
+| **Parameters** | `connection`: Solana RPC Connection<br/>`signer`: Signer<br/>`dbRootId`: database ID (Uint8Array or string)<br/>`partyA`: first user pubkey (string)<br/>`partyB`: second user pubkey (string)<br/>`tableName`: connection table name (string or Uint8Array)<br/>`columns`: column list (Array\<string \| Uint8Array\>)<br/>`idCol`: ID column (string or Uint8Array)<br/>`extKeys`: extension keys (Array\<string \| Uint8Array\>) |
 |----------------|--------------------------|
 | **Returns** | Transaction signature (string) |
 
 ```typescript
-import { requestConnection } from '@iqlabs-official/solana-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
-await requestConnection(
+await iqlabs.writer.requestConnection(
   connection, signer, 'my-db',
   myWalletAddress, friendWalletAddress,
   'dm_table', ['message', 'timestamp'], 'message_id', []
@@ -164,25 +172,31 @@ await requestConnection(
 
 #### `manageConnection()`
 
-| **Parameters** | `builder`: InstructionBuilder<br/>`accounts`: `{ db_root, connection_table, signer }`<br/>`args`: `{ db_root_id, connection_seed, new_status }` |
+<Note>
+There is no high-level SDK wrapper for this function. Use the contract-level instruction builder directly.
+</Note>
+
+| **Parameters** | `builder`: InstructionBuilder<br/>`accounts`: `{ db_root, connection_table, signer }` (PublicKey)<br/>`args`: `{ db_root_id, connection_seed, new_status }` |
 |----------------|--------------------------|
 | **Returns** | TransactionInstruction |
 
 ```typescript
-import { contract } from '@iqlabs-official/solana-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const builder = iqlabs.contract.createInstructionBuilder(iqlabs.contract.PROGRAM_ID);
 
 // Approve a friend request
-const approveIx = contract.manageConnectionInstruction(
+const approveIx = iqlabs.contract.manageConnectionInstruction(
   builder,
   { db_root, connection_table, signer: myPubkey },
-  { db_root_id, connection_seed, new_status: contract.CONNECTION_STATUS_APPROVED }
+  { db_root_id, connection_seed, new_status: iqlabs.contract.CONNECTION_STATUS_APPROVED }
 );
 
 // Block a user
-const blockIx = contract.manageConnectionInstruction(
+const blockIx = iqlabs.contract.manageConnectionInstruction(
   builder,
   { db_root, connection_table, signer: myPubkey },
-  { db_root_id, connection_seed, new_status: contract.CONNECTION_STATUS_BLOCKED }
+  { db_root_id, connection_seed, new_status: iqlabs.contract.CONNECTION_STATUS_BLOCKED }
 );
 ```
 
@@ -190,14 +204,14 @@ const blockIx = contract.manageConnectionInstruction(
 
 #### `readConnection()`
 
-| **Parameters** | `dbRootId`: database ID<br/>`walletA`, `walletB`: the two wallets to check |
+| **Parameters** | `dbRootId`: database ID (Uint8Array or string)<br/>`partyA`: first wallet (string)<br/>`partyB`: second wallet (string) |
 |----------------|--------------------------|
-| **Returns** | `{ status: 'pending' \| 'approved' \| 'blocked', requester, blocker }` |
+| **Returns** | `{ status: 'pending' \| 'approved' \| 'blocked' \| 'unknown', requester: 'a' \| 'b', blocker: 'a' \| 'b' \| 'none' }` |
 
 ```typescript
-import { readConnection } from '@iqlabs-official/solana-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
-const { status, requester, blocker } = await readConnection('my-db', walletA, walletB);
+const { status, requester, blocker } = await iqlabs.reader.readConnection('my-db', partyA, partyB);
 console.log(status); // 'pending' | 'approved' | 'blocked'
 ```
 
@@ -205,14 +219,14 @@ console.log(status); // 'pending' | 'approved' | 'blocked'
 
 #### `writeConnectionRow()`
 
-| **Parameters** | `connection`: Solana RPC connection<br/>`signer`: signing wallet<br/>`dbRootId`: database ID<br/>`connectionSeed`: connection seed<br/>`rowJson`: JSON data |
+| **Parameters** | `connection`: Solana RPC Connection<br/>`signer`: Signer<br/>`dbRootId`: database ID (Uint8Array or string)<br/>`connectionSeed`: connection seed (Uint8Array or string)<br/>`rowJson`: JSON data (string) |
 |----------------|--------------------------|
 | **Returns** | Transaction signature (string) |
 
 ```typescript
-import { writeConnectionRow } from '@iqlabs-official/solana-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
-await writeConnectionRow(
+await iqlabs.writer.writeConnectionRow(
   connection, signer, 'my-db', connectionSeed,
   JSON.stringify({ message_id: '123', message: 'Hello friend!', timestamp: Date.now() })
 );
@@ -226,22 +240,16 @@ Fetch all connections (friend requests) for a user by analyzing their UserState 
 
 | **Parameters** | `userPubkey`: user public key (string or PublicKey)<br/>`options`: optional settings |
 |----------------|--------------------------|
-| **Options** | `limit`: max number of transactions to fetch<br/>`before`: signature to paginate from<br/>`speed`: rate limit profile ('light', 'medium', 'heavy', 'extreme')<br/>`mode`: contract mode (optional) |
-| **Returns** | Array of connection objects with dbRootId, partyA, partyB, status, requester, blocker, timestamp |
+| **Options** | `limit`: max number of transactions to fetch<br/>`before`: signature to paginate from<br/>`speed`: rate limit profile ('light' \| 'medium' \| 'heavy' \| 'extreme') |
+| **Returns** | Array of `{ dbRootId, connectionPda, partyA, partyB, status, requester, blocker, timestamp }` |
 
 ```typescript
 import iqlabs from '@iqlabs-official/solana-sdk';
-const { fetchUserConnections } = iqlabs.reader;
 
-// Fetch all connections (across all apps!)
-const connections = await fetchUserConnections(myPubkey, {
-  speed: 'light',  // 6 RPS (default)
+const connections = await iqlabs.reader.fetchUserConnections(myPubkey, {
+  speed: 'light',
   limit: 100
 });
-
-// Filter by app
-const solchatConnections = connections.filter(c => c.dbRootId === 'solchat');
-const zoConnections = connections.filter(c => c.dbRootId === 'zo-trading');
 
 // Filter by status
 const pendingRequests = connections.filter(c => c.status === 'pending');
@@ -250,7 +258,7 @@ const blocked = connections.filter(c => c.status === 'blocked');
 
 // Check connection details
 connections.forEach(conn => {
-  console.log(`App: ${conn.dbRootId}, ${conn.partyA} <-> ${conn.partyB}, status: ${conn.status}`);
+  console.log(`${conn.partyA} <-> ${conn.partyB}, status: ${conn.status}`);
 });
 ```
 
@@ -260,20 +268,20 @@ connections.forEach(conn => {
 
 #### `writeRow()`
 
-| **Parameters** | `connection`: Solana RPC connection<br/>`signer`: signing wallet<br/>`dbRootId`: database ID<br/>`tableSeed`: table name<br/>`rowJson`: JSON row data |
+| **Parameters** | `connection`: Solana RPC Connection<br/>`signer`: Signer<br/>`dbRootId`: database ID (Uint8Array or string)<br/>`tableSeed`: table name (Uint8Array or string)<br/>`rowJson`: JSON row data (string)<br/>`skipConfirmation`: skip tx confirmation (boolean, default: false) |
 |----------------|--------------------------|
 | **Returns** | Transaction signature (string) |
 
 ```typescript
-import { writeRow } from '@iqlabs-official/solana-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
 // Write the first row to create the table
-await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
+await iqlabs.writer.writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
   id: 1, name: 'Alice', email: 'alice@example.com'
 }));
 
 // Add another row to the same table
-await writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
+await iqlabs.writer.writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
   id: 2, name: 'Bob', email: 'bob@example.com'
 }));
 ```
@@ -332,29 +340,30 @@ const rows = await iqlabs.reader.readTableRows(tablePda, { signatures: chunk });
 
 #### `getTablelistFromRoot()`
 
-| **Parameters** | `dbRootId`: database ID |
+| **Parameters** | `connection`: Solana RPC Connection<br/>`dbRootId`: database ID (Uint8Array or string) |
 |----------------|--------------------------|
-| **Returns** | Table name array (string[]) |
+| **Returns** | `{ rootPda: PublicKey, creator: string \| null, tableSeeds: string[], globalTableSeeds: string[] }` |
 
 ```typescript
-import { getTablelistFromRoot } from '@iqlabs-official/solana-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
-const tables = await getTablelistFromRoot('my-db');
-console.log('Table list:', tables);
+const result = await iqlabs.reader.getTablelistFromRoot(connection, 'my-db');
+console.log('Creator:', result.creator);
+console.log('Table seeds:', result.tableSeeds);
 ```
 
 ---
 
 #### `fetchInventoryTransactions()`
 
-| **Parameters** | `userPubkey`: user public key<br/>`limit`: max count (optional) |
+| **Parameters** | `publicKey`: user public key (PublicKey)<br/>`limit`: max count (number)<br/>`before`: pagination cursor (optional, string) |
 |----------------|--------------------------|
 | **Returns** | Transaction array |
 
 ```typescript
-import { fetchInventoryTransactions } from '@iqlabs-official/solana-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
-const myFiles = await fetchInventoryTransactions(myPubkey, 20);
+const myFiles = await iqlabs.reader.fetchInventoryTransactions(myPubkey, 20);
 myFiles.forEach(tx => {
   let metadata: { data?: unknown } | null = null;
   try {
@@ -380,14 +389,14 @@ myFiles.forEach(tx => {
 
 #### `setRpcUrl()`
 
-| **Parameters** | `url`: Solana RPC URL |
+| **Parameters** | `url`: Solana RPC URL (string) |
 |----------------|--------------------------|
-| **Returns** | None (void) |
+| **Returns** | void |
 
 ```typescript
-import { setRpcUrl } from '@iqlabs-official/solana-sdk';
+import iqlabs from '@iqlabs-official/solana-sdk';
 
-setRpcUrl('https://your-rpc.example.com');
+iqlabs.utils.setRpcUrl('https://your-rpc.example.com');
 ```
 
 ---
@@ -402,22 +411,25 @@ These are low-level SDK functions. Not needed for typical usage, but useful when
 
 #### `manageRowData()`
 
-Low-level function for managing row data in tables.
+Unified function that handles both table row writes and connection row writes. Auto-detects whether to write to a table or connection based on existing PDAs.
 
 | **Module** | `writer` |
 |------------|----------|
-| **Use Case** | Custom row management, batch operations |
+| **Parameters** | `connection`: Solana RPC Connection<br/>`signer`: Signer<br/>`dbRootId`: database ID (Uint8Array or string)<br/>`seed`: table or connection seed (Uint8Array or string)<br/>`rowJson`: JSON row data (string)<br/>`tableName`: required for table edits (optional, string or Uint8Array)<br/>`targetTx`: reference tx for table edits (optional, string or Uint8Array) |
+| **Returns** | Transaction signature (string) |
+| **Use Case** | Custom row management, updating existing rows |
 
 ```typescript
 import iqlabs from '@iqlabs-official/solana-sdk';
-const { manageRowData } = iqlabs.writer;
 
-await manageRowData(connection, signer, {
-  dbRootId: 'my-db',
-  tableSeed: 'users',
-  operation: 'update',
-  rowData: JSON.stringify({ id: 1, name: 'Updated Name' })
-});
+await iqlabs.writer.manageRowData(
+  connection, signer,
+  'my-db',       // dbRootId
+  'users',       // seed (table seed)
+  JSON.stringify({ id: 1, name: 'Updated Name' }),
+  'users',       // tableName
+  originalTxSig  // targetTx
+);
 ```
 
 ---
@@ -430,54 +442,57 @@ Reads the UserState PDA for a given user.
 
 | **Module** | `reader` |
 |------------|----------|
+| **Parameters** | `userPubkey`: user public key (string) |
+| **Returns** | `{ owner: string, metadata: string \| null, totalSessionFiles: bigint, profileData?: string }` |
 | **Use Case** | Fetching user profile data, checking upload counts |
 
 ```typescript
 import iqlabs from '@iqlabs-official/solana-sdk';
-const { readUserState } = iqlabs.reader;
 
-const userState = await readUserState(userPubkey);
-console.log('Profile:', userState.profile);
-console.log('Upload count:', userState.fileCount);
+const userState = await iqlabs.reader.readUserState(userPubkey);
+console.log('Owner:', userState.owner);
+console.log('Session files:', userState.totalSessionFiles);
+console.log('Profile data:', userState.profileData);
 ```
 
 ---
 
 #### `readInventoryMetadata()`
 
-Reads metadata associated with a user's inventory (uploaded files).
+Reads metadata associated with a user's inventory transaction.
 
 | **Module** | `reader` |
 |------------|----------|
-| **Use Case** | Listing user files with metadata, file management |
+| **Parameters** | `txSignature`: transaction signature (string) |
+| **Returns** | `{ onChainPath: string, metadata: string }` |
+| **Use Case** | Extracting file metadata from inventory transactions |
 
 ```typescript
 import iqlabs from '@iqlabs-official/solana-sdk';
-const { readInventoryMetadata } = iqlabs.reader;
 
-const metadata = await readInventoryMetadata(userPubkey);
-metadata.forEach(item => {
-  console.log(`File: ${item.name}, Size: ${item.size}, Signature: ${item.signature}`);
-});
+const result = await iqlabs.reader.readInventoryMetadata(txSignature);
+console.log('Path:', result.onChainPath);
+console.log('Metadata:', result.metadata);
 ```
 
 ---
 
 #### `getSessionPdaList()`
 
-Retrieves a list of session PDAs.
+Retrieves a list of session PDA addresses for a user.
 
 | **Module** | `reader` |
 |------------|----------|
+| **Parameters** | `userPubkey`: user public key (string) |
+| **Returns** | `string[]` (session PDA base58 strings) |
 | **Use Case** | Session management, active session tracking |
 
 ```typescript
 import iqlabs from '@iqlabs-official/solana-sdk';
-const { getSessionPdaList } = iqlabs.reader;
 
-const sessions = await getSessionPdaList(userPubkey);
-sessions.forEach(session => {
-  console.log(`Session PDA: ${session.pda}, Active: ${session.isActive}`);
+const sessions = await iqlabs.reader.getSessionPdaList(userPubkey);
+sessions.forEach(pda => {
+  console.log(`Session PDA: ${pda}`);
 });
 ```
 
@@ -487,37 +502,39 @@ sessions.forEach(session => {
 
 #### `deriveDmSeed()`
 
-Derives a deterministic seed for direct messaging (DM) between two users.
+Derives a deterministic seed for direct messaging (DM) between two users. Sorts the two pubkeys alphabetically and hashes with keccak256.
 
-| **Module** | `utils` / `reader` |
+| **Module** | `utils` |
 |------------|----------|
+| **Parameters** | `userA`: first user pubkey (string)<br/>`userB`: second user pubkey (string) |
+| **Returns** | `Uint8Array` (seed bytes) |
 | **Use Case** | Creating consistent connection identifiers, DM channel setup |
 
 ```typescript
 import iqlabs from '@iqlabs-official/solana-sdk';
-const { deriveDmSeed } = iqlabs.utils;
 
-const seed1 = deriveDmSeed(walletA, walletB);
-const seed2 = deriveDmSeed(walletB, walletA);
-console.log(seed1 === seed2); // true
+const seed1 = iqlabs.utils.deriveDmSeed(walletA, walletB);
+const seed2 = iqlabs.utils.deriveDmSeed(walletB, walletA);
+// seed1 and seed2 are identical — order doesn't matter
 ```
 
 ---
 
 #### `toSeedBytes()`
 
-Converts a string seed to the byte format required for PDA derivation.
+Converts a seed identifier to bytes. If the input is a 64-character hex string, it returns hex bytes directly. Otherwise, it applies keccak256 hash.
 
 | **Module** | `utils` |
 |------------|----------|
+| **Parameters** | `value`: seed string or Uint8Array |
+| **Returns** | `Uint8Array` |
 | **Use Case** | Custom PDA derivation, low-level seed manipulation |
 
 ```typescript
 import iqlabs from '@iqlabs-official/solana-sdk';
-const { toSeedBytes } = iqlabs.utils;
 
 const seedString = 'my-custom-seed';
-const seedBytes = toSeedBytes(seedString);
+const seedBytes = iqlabs.utils.toSeedBytes(seedString);
 
 const [pda, bump] = PublicKey.findProgramAddressSync(
   [seedBytes, otherSeed],

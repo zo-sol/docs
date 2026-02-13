@@ -1,0 +1,530 @@
+---
+title: "డెవలపర్ డాక్స్ (Python)"
+description: "IQLabs Python SDK కోసం ప్రధాన భావనలు మరియు ఫంక్షన్లు"
+---
+
+<Note>
+ఈ డాక్యుమెంట్ ప్రస్తుతం తయారీలో ఉంది మరియు మెరుగుపరచబడుతుంది.
+</Note>
+
+## ఇన్‌స్టాలేషన్
+
+```bash
+pip install iqlabs-solana-sdk
+```
+
+---
+
+## ప్రధాన భావనలు
+
+IQLabs SDK ను ఉపయోగించే ముందు తెలుసుకోవలసిన కీలక భావనలు ఇవి.
+
+---
+
+### డేటా నిల్వ (కోడ్ ఇన్)
+
+ఆన్-చెయిన్‌లో ఏదైనా డేటా (ఫైల్స్, టెక్స్ట్, JSON) నిల్వ చేయడం ఇలా చేయబడుతుంది.
+
+#### ఇది ఎలా నిల్వ చేయబడుతుంది?
+
+డేటా పరిమాణాన్ని బట్టి, SDK సరైన పద్ధతిని ఎంచుకుంటుంది:
+
+- **చిన్న డేటా (&lt; 850 బైట్లు)**: వెంటనే నిల్వ, అత్యంత వేగవంతం
+- **మధ్యస్థ డేటా (&lt; 8.5 KB)**: అనేక లావాదేవీలుగా విభజించబడుతుంది
+- **పెద్ద డేటా (&gt;= 8.5 KB)**: వేగం కోసం సమాంతరంగా అప్‌లోడ్ చేయబడుతుంది
+
+#### సంబంధిత కీలక ఫంక్షన్లు
+
+- [`code_in()`](#code_in): డేటాను అప్‌లోడ్ చేసి లావాదేవీ ID పొందండి
+- [`read_code_in()`](#read_code_in): లావాదేవీ ID నుండి డేటాను తిరిగి చదవండి
+
+---
+
+### యూజర్ స్టేట్ PDA
+
+ఒక యూజర్ కోసం ఆన్-చెయిన్ ప్రొఫైల్ ఖాతా.
+
+#### ఏమి నిల్వ చేయబడుతుంది?
+
+- ప్రొఫైల్ సమాచారం (పేరు, ప్రొఫైల్ చిత్రం, బయో, మొదలైనవి)
+- అప్‌లోడ్ చేసిన ఫైల్‌ల సంఖ్య
+- ఫ్రెండ్ రిక్వెస్ట్ రికార్డులు
+
+<Note>
+ఫ్రెండ్ రిక్వెస్ట్‌లు PDA లో విలువలుగా నిల్వ చేయబడవు; అవి లావాదేవీలుగా పంపబడతాయి.
+</Note>
+
+#### ఇది ఎప్పుడు సృష్టించబడుతుంది?
+
+మీరు [`code_in()`](#code_in) ను మొదటిసారి కాల్ చేసినప్పుడు ఇది స్వయంచాలకంగా సృష్టించబడుతుంది. అదనపు సెటప్ అవసరం లేదు, కానీ మొదటి యూజర్‌కు రెండుసార్లు సంతకం చేయవలసి రావచ్చు.
+
+---
+
+### కనెక్షన్ PDA
+
+ఇద్దరు యూజర్ల మధ్య సంబంధాలను (ఫ్రెండ్స్, సందేశాలు, మొదలైనవి) నిర్వహించే ఆన్-చెయిన్ ఖాతా.
+
+#### ఇది ఏ స్థితులను కలిగి ఉంటుంది?
+
+- **pending**: ఫ్రెండ్ రిక్వెస్ట్ పంపబడింది కానీ ఇంకా ఆమోదించబడలేదు
+- **approved**: రిక్వెస్ట్ ఆమోదించబడింది మరియు యూజర్లు అనుసంధానమయ్యారు
+- **blocked**: ఒక వైపు మరొకరిని బ్లాక్ చేసింది
+
+<Warning>
+బ్లాక్ చేసిన కనెక్షన్‌ను బ్లాక్ చేసిన వ్యక్తి మాత్రమే అన్‌బ్లాక్ చేయగలరు.
+</Warning>
+
+#### సంబంధిత కీలక ఫంక్షన్లు
+
+- [`request_connection()`](#request_connection): ఫ్రెండ్ రిక్వెస్ట్ పంపండి (pending సృష్టిస్తుంది)
+- [`manage_connection()`](#manage_connection): రిక్వెస్ట్‌ను ఆమోదించండి/తిరస్కరించండి/బ్లాక్ చేయండి/అన్‌బ్లాక్ చేయండి
+- [`read_connection()`](#read_connection): ప్రస్తుత సంబంధ స్థితిని తనిఖీ చేయండి
+- [`write_connection_row()`](#write_connection_row): అనుసంధానమైన ఫ్రెండ్‌తో సందేశాలు/డేటా మార్పిడి చేయండి
+- [`fetch_user_connections()`](#fetch_user_connections): అన్ని కనెక్షన్‌లను పొందండి (పంపిన & అందుకున్న ఫ్రెండ్ రిక్వెస్ట్‌లు)
+
+---
+
+### డేటాబేస్ టేబుల్స్
+
+డేటాబేస్ లాగా టేబుల్స్‌లో JSON డేటాను నిల్వ చేయండి.
+
+#### టేబుల్స్ ఎలా సృష్టించబడతాయి?
+
+ప్రత్యేకంగా "టేబుల్ సృష్టించు" ఫంక్షన్ లేదు. [`write_row()`](#write_row) ద్వారా మొదటి రాత స్వయంచాలకంగా టేబుల్‌ను సృష్టిస్తుంది.
+
+<Note>
+ఒక టేబుల్ `db_root_id` మరియు `table_seed` (టేబుల్ పేరు) కలయిక ద్వారా ప్రత్యేకంగా గుర్తించబడుతుంది.
+</Note>
+
+#### సంబంధిత కీలక ఫంక్షన్లు
+
+- [`write_row()`](#write_row): కొత్త వరుసను జోడించండి (టేబుల్ లేకపోతే సృష్టిస్తుంది)
+- [`read_table_rows()`](#read_table_rows): టేబుల్ నుండి వరుసలను చదవండి
+- [`get_tablelist_from_root()`](#get_tablelist_from_root): డేటాబేస్‌లోని అన్ని టేబుల్స్‌ను జాబితా చేయండి
+- [`fetch_inventory_transactions()`](#fetch_inventory_transactions): అప్‌లోడ్ చేసిన ఫైల్‌లను జాబితా చేయండి
+
+---
+
+## ఫంక్షన్ వివరాలు
+
+### డేటా నిల్వ మరియు రీట్రీవల్
+
+#### `code_in()`
+
+| **పారామీటర్లు** | `connection`: Solana RPC AsyncClient<br/>`signer`: Keypair లేదా WalletSigner<br/>`chunks`: అప్‌లోడ్ చేయవలసిన డేటా (list[str])<br/>`filename`: ఐచ్ఛిక ఫైల్ పేరు (str లేదా None)<br/>`method`: అప్‌లోడ్ పద్ధతి (int, డిఫాల్ట్: 0)<br/>`filetype`: ఫైల్ రకం సూచన (str, డిఫాల్ట్: '')<br/>`on_progress`: ఐచ్ఛిక ప్రోగ్రెస్ కాల్‌బ్యాక్ (Callable[[int], None]) |
+|----------------|--------------------------|
+| **రిటర్న్స్** | లావాదేవీ సంతకం (str) |
+
+```python
+from iqlabs import writer
+from solana.rpc.async_api import AsyncClient
+from solders.keypair import Keypair
+
+# డేటాను అప్‌లోడ్ చేయండి
+signature = await writer.code_in(connection, signer, ['Hello, blockchain!'])
+
+# ఫైల్ పేరుతో అప్‌లోడ్ చేయండి
+signature = await writer.code_in(connection, signer, ['file contents here'], filename='hello.txt')
+```
+
+---
+
+#### `read_code_in()`
+
+| **పారామీటర్లు** | `tx_signature`: లావాదేవీ సంతకం (str)<br/>`speed`: రేట్ లిమిట్ ప్రొఫైల్ (ఐచ్ఛికం, str)<br/>`on_progress`: ఐచ్ఛిక ప్రోగ్రెస్ కాల్‌బ్యాక్ (Callable[[int], None]) |
+|----------------|--------------------------|
+| **రిటర్న్స్** | `metadata` (str) మరియు `data` (str లేదా None) కలిగిన dict |
+
+```python
+from iqlabs import reader
+
+result = await reader.read_code_in('5Xg7...')
+print(result['data'])      # 'Hello, blockchain!'
+print(result['metadata'])  # ఫైల్ మెటాడేటాతో JSON స్ట్రింగ్
+```
+
+---
+
+### కనెక్షన్ నిర్వహణ
+
+#### `request_connection()`
+
+| **పారామీటర్లు** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: డేటాబేస్ ID (bytes లేదా str)<br/>`party_a`: మొదటి యూజర్ pubkey (str)<br/>`party_b`: రెండవ యూజర్ pubkey (str)<br/>`table_name`: కనెక్షన్ టేబుల్ పేరు (str లేదా bytes)<br/>`columns`: కాలమ్ జాబితా (list[str లేదా bytes])<br/>`id_col`: ID కాలమ్ (str లేదా bytes)<br/>`ext_keys`: ఎక్స్‌టెన్షన్ కీలు (list[str లేదా bytes]) |
+|----------------|--------------------------|
+| **రిటర్న్స్** | లావాదేవీ సంతకం (str) |
+
+```python
+from iqlabs import writer
+
+await writer.request_connection(
+    connection, signer, 'my-db',
+    my_wallet_address, friend_wallet_address,
+    'dm_table', ['message', 'timestamp'], 'message_id', []
+)
+```
+
+---
+
+#### `manage_connection()`
+
+<Note>
+ఈ ఫంక్షన్ కోసం ఉన్నత-స్థాయి SDK ర్యాపర్ లేదు. కాంట్రాక్ట్-స్థాయి ఇన్‌స్ట్రక్షన్ బిల్డర్‌ను నేరుగా ఉపయోగించండి.
+</Note>
+
+| **పారామీటర్లు** | `builder`: InstructionBuilder<br/>`accounts`: `db_root`, `connection_table`, `signer` కలిగిన dict<br/>`args`: `db_root_id`, `connection_seed`, `new_status` కలిగిన dict |
+|----------------|--------------------------|
+| **రిటర్న్స్** | Instruction |
+
+```python
+from iqlabs import contract
+
+# ఇన్‌స్ట్రక్షన్ బిల్డర్‌ను సృష్టించండి
+builder = contract.create_instruction_builder(contract.get_program_id())
+
+# ఫ్రెండ్ రిక్వెస్ట్‌ను ఆమోదించండి
+approve_ix = contract.manage_connection_instruction(
+    builder,
+    {"db_root": db_root, "connection_table": connection_table, "signer": my_pubkey},
+    {"db_root_id": db_root_id, "connection_seed": connection_seed, "new_status": contract.CONNECTION_STATUS_APPROVED}
+)
+
+# యూజర్‌ను బ్లాక్ చేయండి
+block_ix = contract.manage_connection_instruction(
+    builder,
+    {"db_root": db_root, "connection_table": connection_table, "signer": my_pubkey},
+    {"db_root_id": db_root_id, "connection_seed": connection_seed, "new_status": contract.CONNECTION_STATUS_BLOCKED}
+)
+```
+
+---
+
+#### `read_connection()`
+
+| **పారామీటర్లు** | `db_root_id`: డేటాబేస్ ID (bytes లేదా str)<br/>`party_a`: మొదటి వాలెట్ (str)<br/>`party_b`: రెండవ వాలెట్ (str) |
+|----------------|--------------------------|
+| **రిటర్న్స్** | `status`, `requester`, `blocker` కలిగిన dict |
+
+```python
+from iqlabs import reader
+
+conn_info = await reader.read_connection('my-db', party_a, party_b)
+print(conn_info['status'])  # 'pending' | 'approved' | 'blocked'
+```
+
+---
+
+#### `write_connection_row()`
+
+| **పారామీటర్లు** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: డేటాబేస్ ID (bytes లేదా str)<br/>`connection_seed`: కనెక్షన్ సీడ్ (bytes లేదా str)<br/>`row_json`: JSON డేటా (str) |
+|----------------|--------------------------|
+| **రిటర్న్స్** | లావాదేవీ సంతకం (str) |
+
+```python
+from iqlabs import writer
+import json
+
+await writer.write_connection_row(
+    connection, signer, 'my-db', connection_seed,
+    json.dumps({"message_id": "123", "message": "Hello friend!", "timestamp": 1234567890})
+)
+```
+
+---
+
+#### `fetch_user_connections()`
+
+యూజర్ యొక్క UserState PDA లావాదేవీ చరిత్రను విశ్లేషించడం ద్వారా ఒక యూజర్ కోసం అన్ని కనెక్షన్‌లను (ఫ్రెండ్ రిక్వెస్ట్‌లు) పొందండి. ప్రతి కనెక్షన్ దాని `db_root_id` ను కలిగి ఉంటుంది, ఇది ఏ యాప్‌కు కనెక్షన్ చెందుతుందో గుర్తిస్తుంది.
+
+| **పారామీటర్లు** | `user_pubkey`: యూజర్ పబ్లిక్ కీ (str లేదా Pubkey)<br/>`limit`: పొందవలసిన గరిష్ట లావాదేవీల సంఖ్య (ఐచ్ఛికం)<br/>`before`: పేజినేట్ చేయడానికి సంతకం (ఐచ్ఛికం)<br/>`speed`: రేట్ లిమిట్ ప్రొఫైల్ (ఐచ్ఛికం) |
+|----------------|--------------------------|
+| **రిటర్న్స్** | db_root_id, connection_pda, party_a, party_b, status, requester, blocker, timestamp కలిగిన కనెక్షన్ dict ల జాబితా |
+
+```python
+from iqlabs import reader
+
+# అన్ని కనెక్షన్‌లను పొందండి (అన్ని యాప్‌ల అంతటా!)
+connections = await reader.fetch_user_connections(
+    my_pubkey,
+    speed="light",
+    limit=100
+)
+
+# స్థితి ప్రకారం ఫిల్టర్ చేయండి
+pending_requests = [c for c in connections if c['status'] == 'pending']
+friends = [c for c in connections if c['status'] == 'approved']
+blocked = [c for c in connections if c['status'] == 'blocked']
+
+# కనెక్షన్ వివరాలను తనిఖీ చేయండి
+for conn in connections:
+    print(f"Party A: {conn['party_a']} <-> Party B: {conn['party_b']}, status: {conn['status']}")
+```
+
+---
+
+### టేబుల్ నిర్వహణ
+
+#### `write_row()`
+
+| **పారామీటర్లు** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: డేటాబేస్ ID (bytes లేదా str)<br/>`table_seed`: టేబుల్ పేరు (bytes లేదా str)<br/>`row_json`: JSON వరుస డేటా (str)<br/>`skip_confirmation`: tx నిర్ధారణను దాటవేయండి (డిఫాల్ట్: False) |
+|----------------|--------------------------|
+| **రిటర్న్స్** | లావాదేవీ సంతకం (str) |
+
+```python
+from iqlabs import writer
+import json
+
+# టేబుల్‌ను సృష్టించడానికి మొదటి వరుసను రాయండి
+await writer.write_row(connection, signer, 'my-db', 'users', json.dumps({
+    "id": 1, "name": "Alice", "email": "alice@example.com"
+}))
+
+# అదే టేబుల్‌కు మరొక వరుసను జోడించండి
+await writer.write_row(connection, signer, 'my-db', 'users', json.dumps({
+    "id": 2, "name": "Bob", "email": "bob@example.com"
+}))
+```
+
+---
+
+#### `read_table_rows()`
+
+| **పారామీటర్లు** | `account`: టేబుల్ PDA (Pubkey లేదా str)<br/>`before`: పేజినేషన్ కోసం సంతకం కర్సర్ (ఐచ్ఛికం)<br/>`limit`: పొందవలసిన గరిష్ట వరుసల సంఖ్య (ఐచ్ఛికం)<br/>`speed`: రేట్ లిమిట్ ప్రొఫైల్ (ఐచ్ఛికం) |
+|----------------|--------------------------|
+| **రిటర్న్స్** | `list[dict]` |
+
+```python
+from iqlabs import reader
+
+# ప్రాథమిక వినియోగం
+rows = await reader.read_table_rows(table_pda, limit=50)
+
+# కర్సర్-ఆధారిత పేజినేషన్
+older_rows = await reader.read_table_rows(table_pda, limit=50, before="sig...")
+```
+
+---
+
+#### `get_tablelist_from_root()`
+
+| **పారామీటర్లు** | `connection`: AsyncClient<br/>`db_root_id`: డేటాబేస్ ID (bytes లేదా str) |
+|----------------|--------------------------|
+| **రిటర్న్స్** | `root_pda`, `creator`, `table_seeds`, `global_table_seeds` కలిగిన dict |
+
+```python
+from iqlabs import reader
+
+result = await reader.get_tablelist_from_root(connection, 'my-db')
+print('Creator:', result['creator'])
+print('Table seeds:', result['table_seeds'])
+```
+
+---
+
+#### `fetch_inventory_transactions()`
+
+| **పారామీటర్లు** | `public_key`: యూజర్ పబ్లిక్ కీ (Pubkey)<br/>`limit`: గరిష్ట సంఖ్య (int)<br/>`before`: పేజినేషన్ కర్సర్ (ఐచ్ఛికం, str) |
+|----------------|--------------------------|
+| **రిటర్న్స్** | లావాదేవీ జాబితా |
+
+```python
+from iqlabs import reader
+from solders.pubkey import Pubkey
+import json
+
+my_files = await reader.fetch_inventory_transactions(my_pubkey, 20)
+for tx in my_files:
+    metadata = None
+    try:
+        metadata = json.loads(tx['metadata'])
+    except:
+        metadata = None
+
+    if metadata and 'data' in metadata:
+        inline_data = metadata['data'] if isinstance(metadata['data'], str) else json.dumps(metadata['data'])
+        print(f"Inline data: {inline_data}")
+    else:
+        print(f"Signature: {tx['signature']}")
+```
+
+---
+
+### పర్యావరణ సెట్టింగ్‌లు
+
+#### `set_rpc_url()`
+
+| **పారామీటర్లు** | `url`: Solana RPC URL (str) |
+|----------------|--------------------------|
+| **రిటర్న్స్** | None |
+
+```python
+from iqlabs import set_rpc_url
+
+set_rpc_url('https://your-rpc.example.com')
+```
+
+---
+
+## అధునాతన ఫంక్షన్లు
+
+<Warning>
+ఇవి తక్కువ-స్థాయి SDK ఫంక్షన్లు. సాధారణ వినియోగానికి అవసరం లేదు, కానీ అనుకూల ఫీచర్లను నిర్మించేటప్పుడు లేదా డీబగ్గింగ్ చేసేటప్పుడు ఉపయోగపడతాయి.
+</Warning>
+
+### రైటర్ ఫంక్షన్లు
+
+#### `manage_row_data()`
+
+టేబుల్ వరుస రాతలు మరియు కనెక్షన్ వరుస రాతలు రెండింటినీ నిర్వహించే ఏకీకృత ఫంక్షన్. ఇప్పటికే ఉన్న PDA ల ఆధారంగా టేబుల్‌కు రాయాలా లేదా కనెక్షన్‌కు రాయాలా అనేది స్వయంచాలకంగా గుర్తిస్తుంది.
+
+| **మాడ్యూల్** | `writer` |
+|------------|----------|
+| **పారామీటర్లు** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: డేటాబేస్ ID (bytes లేదా str)<br/>`seed`: టేబుల్ లేదా కనెక్షన్ సీడ్ (bytes లేదా str)<br/>`row_json`: JSON వరుస డేటా (str)<br/>`table_name`: టేబుల్ ఎడిట్‌లకు అవసరం (ఐచ్ఛికం)<br/>`target_tx`: టేబుల్ ఎడిట్‌ల కోసం సూచన tx (ఐచ్ఛికం) |
+| **రిటర్న్స్** | లావాదేవీ సంతకం (str) |
+| **ఉపయోగ సందర్భం** | అనుకూల వరుస నిర్వహణ, ఇప్పటికే ఉన్న వరుసలను నవీకరించడం |
+
+```python
+from iqlabs import writer
+import json
+
+await writer.manage_row_data(
+    connection, signer,
+    'my-db',       # db_root_id
+    'users',       # seed (టేబుల్ సీడ్)
+    json.dumps({"id": 1, "name": "Updated Name"}),
+    table_name='users',
+    target_tx=original_tx_sig
+)
+```
+
+---
+
+### రీడర్ ఫంక్షన్లు
+
+#### `read_user_state()`
+
+ఇచ్చిన యూజర్ కోసం UserState PDA ను చదువుతుంది.
+
+| **మాడ్యూల్** | `reader` |
+|------------|----------|
+| **పారామీటర్లు** | `user_pubkey`: యూజర్ పబ్లిక్ కీ (str) |
+| **రిటర్న్స్** | `owner`, `metadata`, `total_session_files`, `profile_data` కలిగిన dict |
+| **ఉపయోగ సందర్భం** | యూజర్ ప్రొఫైల్ డేటాను పొందడం, అప్‌లోడ్ గణనలను తనిఖీ చేయడం |
+
+```python
+from iqlabs import reader
+
+user_state = await reader.read_user_state(user_pubkey)
+print('Owner:', user_state['owner'])
+print('Session files:', user_state['total_session_files'])
+print('Profile data:', user_state['profile_data'])
+```
+
+---
+
+#### `read_inventory_metadata()`
+
+యూజర్ యొక్క ఇన్వెంటరీ లావాదేవీతో అనుబంధించబడిన మెటాడేటాను చదువుతుంది.
+
+| **మాడ్యూల్** | `reader` |
+|------------|----------|
+| **పారామీటర్లు** | `tx_signature`: లావాదేవీ సంతకం (str) |
+| **రిటర్న్స్** | మెటాడేటా కలిగిన dict |
+| **ఉపయోగ సందర్భం** | ఇన్వెంటరీ లావాదేవీల నుండి ఫైల్ మెటాడేటాను వెలికితీయడం |
+
+```python
+from iqlabs import reader
+
+result = await reader.read_inventory_metadata(tx_signature)
+print('Metadata:', result)
+```
+
+---
+
+#### `get_session_pda_list()`
+
+యూజర్ కోసం సెషన్ PDA చిరునామాల జాబితాను తిరిగి పొందుతుంది.
+
+| **మాడ్యూల్** | `reader` |
+|------------|----------|
+| **పారామీటర్లు** | `user_pubkey`: యూజర్ పబ్లిక్ కీ (str) |
+| **రిటర్న్స్** | `list[str]` (సెషన్ PDA base58 స్ట్రింగ్‌లు) |
+| **ఉపయోగ సందర్భం** | సెషన్ నిర్వహణ, క్రియాశీల సెషన్ ట్రాకింగ్ |
+
+```python
+from iqlabs import reader
+
+sessions = await reader.get_session_pda_list(user_pubkey)
+for pda in sessions:
+    print(f"Session PDA: {pda}")
+```
+
+---
+
+#### కాంట్రాక్ట్ PDA ఫంక్షన్లు
+
+`contract` మాడ్యూల్‌లో అందుబాటులో ఉన్న తక్కువ-స్థాయి PDA డెరివేషన్ ఫంక్షన్లు.
+
+| **మాడ్యూల్** | `contract` |
+|------------|----------|
+| **ఉపయోగ సందర్భం** | అనుకూల PDA డెరివేషన్, ఖాతా లుకప్‌లు |
+
+```python
+from iqlabs import contract
+from solders.pubkey import Pubkey
+
+program_id = contract.get_program_id()
+db_root_pda = contract.get_db_root_pda(db_root_id, program_id)
+table_pda = contract.get_table_pda(db_root_pda, table_seed, program_id)
+user_pda = contract.get_user_pda(user_pubkey, program_id)
+session_pda = contract.get_session_pda(user_pubkey, seq=0, program_id=program_id)
+connection_pda = contract.get_connection_table_pda(db_root_pda, connection_seed, program_id)
+```
+
+---
+
+### యుటిలిటీ ఫంక్షన్లు
+
+#### `derive_dm_seed()`
+
+ఇద్దరు యూజర్ల మధ్య డైరెక్ట్ మెసేజింగ్ (DM) కోసం నిర్ణయాత్మక సీడ్‌ను ఉత్పన్నం చేస్తుంది. రెండు pubkey లను అక్షరక్రమంలో క్రమబద్ధీకరించి `"lower:upper"` ను Keccak-256 తో హ్యాష్ చేస్తుంది.
+
+| **మాడ్యూల్** | `utils` |
+|------------|----------|
+| **పారామీటర్లు** | `user_a`: మొదటి యూజర్ pubkey (str)<br/>`user_b`: రెండవ యూజర్ pubkey (str) |
+| **రిటర్న్స్** | bytes (32-బైట్ సీడ్) |
+| **ఉపయోగ సందర్భం** | స్థిరమైన కనెక్షన్ ఐడెంటిఫయర్‌లను సృష్టించడం, DM ఛానల్ సెటప్ |
+
+```python
+from iqlabs.sdk.utils.seed import derive_dm_seed
+
+seed1 = derive_dm_seed(wallet_a, wallet_b)
+seed2 = derive_dm_seed(wallet_b, wallet_a)
+print(seed1 == seed2)  # True — క్రమం ముఖ్యం కాదు
+```
+
+---
+
+#### `to_seed_bytes()`
+
+సీడ్ ఐడెంటిఫయర్‌ను bytes గా మారుస్తుంది. ఇన్‌పుట్ 64-అక్షరాల హెక్స్ స్ట్రింగ్ అయితే, అది యథాతథంగా పాస్ అవుతుంది. లేకపోతే, Keccak-256 హ్యాష్ వర్తింపజేయబడుతుంది.
+
+| **మాడ్యూల్** | `utils` |
+|------------|----------|
+| **పారామీటర్లు** | `value`: సీడ్ స్ట్రింగ్ లేదా bytes |
+| **రిటర్న్స్** | bytes |
+| **ఉపయోగ సందర్భం** | అనుకూల PDA డెరివేషన్, తక్కువ-స్థాయి సీడ్ మానిప్యులేషన్ |
+
+```python
+from iqlabs.sdk.utils.seed import to_seed_bytes
+from solders.pubkey import Pubkey
+
+seed_string = 'my-custom-seed'
+seed_bytes = to_seed_bytes(seed_string)
+
+pda, bump = Pubkey.find_program_address(
+    [seed_bytes, other_seed],
+    program_id
+)
+```
+
+---

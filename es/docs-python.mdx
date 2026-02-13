@@ -1,0 +1,530 @@
+---
+title: "Documentación para desarrolladores (Python)"
+description: "Conceptos y funciones principales del SDK de IQLabs para Python"
+---
+
+<Note>
+Este documento está en desarrollo y será refinado.
+</Note>
+
+## Instalación
+
+```bash
+pip install iqlabs-solana-sdk
+```
+
+---
+
+## Conceptos principales
+
+Estos son los conceptos clave que debes conocer antes de usar el SDK de IQLabs.
+
+---
+
+### Almacenamiento de datos (Code In)
+
+Así es como almacenas cualquier dato (archivos, texto, JSON) en la cadena de bloques.
+
+#### ¿Cómo se almacena?
+
+Dependiendo del tamaño de los datos, el SDK elige el método óptimo:
+
+- **Datos pequeños (&lt; 850 bytes)**: se almacenan inmediatamente, el más rápido
+- **Datos medianos (&lt; 8.5 KB)**: se dividen en múltiples transacciones
+- **Datos grandes (&gt;= 8.5 KB)**: se suben en paralelo para mayor velocidad
+
+#### Funciones clave relacionadas
+
+- [`code_in()`](#code_in): subir datos y obtener un ID de transacción
+- [`read_code_in()`](#read_code_in): leer datos a partir de un ID de transacción
+
+---
+
+### PDA de estado de usuario
+
+Una cuenta de perfil en la cadena de bloques para un usuario.
+
+#### ¿Qué se almacena?
+
+- Información de perfil (nombre, foto de perfil, biografía, etc.)
+- Número de archivos subidos
+- Registros de solicitudes de amistad
+
+<Note>
+Las solicitudes de amistad no se almacenan como valores en el PDA; se envían como transacciones.
+</Note>
+
+#### ¿Cuándo se crea?
+
+Se crea automáticamente la primera vez que llamas a [`code_in()`](#code_in). No se requiere configuración adicional, pero el primer usuario puede necesitar firmar dos veces.
+
+---
+
+### PDA de conexión
+
+Una cuenta en la cadena de bloques que gestiona las relaciones entre dos usuarios (amigos, mensajes, etc.).
+
+#### ¿Qué estados puede tener?
+
+- **pending** (pendiente): se envió una solicitud de amistad pero aún no fue aceptada
+- **approved** (aprobado): la solicitud fue aceptada y los usuarios están conectados
+- **blocked** (bloqueado): una de las partes bloqueó a la otra
+
+<Warning>
+Una conexión bloqueada solo puede ser desbloqueada por quien la bloqueó.
+</Warning>
+
+#### Funciones clave relacionadas
+
+- [`request_connection()`](#request_connection): enviar una solicitud de amistad (crea estado pendiente)
+- [`manage_connection()`](#manage_connection): aprobar/rechazar/bloquear/desbloquear una solicitud
+- [`read_connection()`](#read_connection): verificar el estado actual de la relación
+- [`write_connection_row()`](#write_connection_row): intercambiar mensajes/datos con un amigo conectado
+- [`fetch_user_connections()`](#fetch_user_connections): obtener todas las conexiones (solicitudes de amistad enviadas y recibidas)
+
+---
+
+### Tablas de base de datos
+
+Almacena datos JSON en tablas como una base de datos.
+
+#### ¿Cómo se crean las tablas?
+
+No existe una función dedicada para "crear tabla". La primera escritura mediante [`write_row()`](#write_row) crea la tabla automáticamente.
+
+<Note>
+Una tabla se identifica de forma única por la combinación de `db_root_id` y `table_seed` (nombre de la tabla).
+</Note>
+
+#### Funciones clave relacionadas
+
+- [`write_row()`](#write_row): agregar una nueva fila (crea la tabla si no existe)
+- [`read_table_rows()`](#read_table_rows): leer filas de una tabla
+- [`get_tablelist_from_root()`](#get_tablelist_from_root): listar todas las tablas en una base de datos
+- [`fetch_inventory_transactions()`](#fetch_inventory_transactions): listar archivos subidos
+
+---
+
+## Detalles de funciones
+
+### Almacenamiento y recuperación de datos
+
+#### `code_in()`
+
+| **Parámetros** | `connection`: AsyncClient de Solana RPC<br/>`signer`: Keypair o WalletSigner<br/>`chunks`: datos a subir (list[str])<br/>`filename`: nombre de archivo opcional (str o None)<br/>`method`: método de subida (int, por defecto: 0)<br/>`filetype`: indicador de tipo de archivo (str, por defecto: '')<br/>`on_progress`: callback de progreso opcional (Callable[[int], None]) |
+|----------------|--------------------------|
+| **Retorna** | Firma de transacción (str) |
+
+```python
+from iqlabs import writer
+from solana.rpc.async_api import AsyncClient
+from solders.keypair import Keypair
+
+# Subir datos
+signature = await writer.code_in(connection, signer, ['Hello, blockchain!'])
+
+# Subir con nombre de archivo
+signature = await writer.code_in(connection, signer, ['file contents here'], filename='hello.txt')
+```
+
+---
+
+#### `read_code_in()`
+
+| **Parámetros** | `tx_signature`: firma de transacción (str)<br/>`speed`: perfil de límite de velocidad (opcional, str)<br/>`on_progress`: callback de progreso opcional (Callable[[int], None]) |
+|----------------|--------------------------|
+| **Retorna** | dict con `metadata` (str) y `data` (str o None) |
+
+```python
+from iqlabs import reader
+
+result = await reader.read_code_in('5Xg7...')
+print(result['data'])      # 'Hello, blockchain!'
+print(result['metadata'])  # JSON string with file metadata
+```
+
+---
+
+### Gestión de conexiones
+
+#### `request_connection()`
+
+| **Parámetros** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: ID de base de datos (bytes o str)<br/>`party_a`: clave pública del primer usuario (str)<br/>`party_b`: clave pública del segundo usuario (str)<br/>`table_name`: nombre de la tabla de conexión (str o bytes)<br/>`columns`: lista de columnas (list[str o bytes])<br/>`id_col`: columna de ID (str o bytes)<br/>`ext_keys`: claves de extensión (list[str o bytes]) |
+|----------------|--------------------------|
+| **Retorna** | Firma de transacción (str) |
+
+```python
+from iqlabs import writer
+
+await writer.request_connection(
+    connection, signer, 'my-db',
+    my_wallet_address, friend_wallet_address,
+    'dm_table', ['message', 'timestamp'], 'message_id', []
+)
+```
+
+---
+
+#### `manage_connection()`
+
+<Note>
+No existe un wrapper de alto nivel en el SDK para esta función. Usa directamente el constructor de instrucciones a nivel de contrato.
+</Note>
+
+| **Parámetros** | `builder`: InstructionBuilder<br/>`accounts`: dict con `db_root`, `connection_table`, `signer`<br/>`args`: dict con `db_root_id`, `connection_seed`, `new_status` |
+|----------------|--------------------------|
+| **Retorna** | Instrucción |
+
+```python
+from iqlabs import contract
+
+# Crear un constructor de instrucciones
+builder = contract.create_instruction_builder(contract.get_program_id())
+
+# Aprobar una solicitud de amistad
+approve_ix = contract.manage_connection_instruction(
+    builder,
+    {"db_root": db_root, "connection_table": connection_table, "signer": my_pubkey},
+    {"db_root_id": db_root_id, "connection_seed": connection_seed, "new_status": contract.CONNECTION_STATUS_APPROVED}
+)
+
+# Bloquear a un usuario
+block_ix = contract.manage_connection_instruction(
+    builder,
+    {"db_root": db_root, "connection_table": connection_table, "signer": my_pubkey},
+    {"db_root_id": db_root_id, "connection_seed": connection_seed, "new_status": contract.CONNECTION_STATUS_BLOCKED}
+)
+```
+
+---
+
+#### `read_connection()`
+
+| **Parámetros** | `db_root_id`: ID de base de datos (bytes o str)<br/>`party_a`: primera billetera (str)<br/>`party_b`: segunda billetera (str) |
+|----------------|--------------------------|
+| **Retorna** | dict con `status`, `requester`, `blocker` |
+
+```python
+from iqlabs import reader
+
+conn_info = await reader.read_connection('my-db', party_a, party_b)
+print(conn_info['status'])  # 'pending' | 'approved' | 'blocked'
+```
+
+---
+
+#### `write_connection_row()`
+
+| **Parámetros** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: ID de base de datos (bytes o str)<br/>`connection_seed`: semilla de conexión (bytes o str)<br/>`row_json`: datos JSON (str) |
+|----------------|--------------------------|
+| **Retorna** | Firma de transacción (str) |
+
+```python
+from iqlabs import writer
+import json
+
+await writer.write_connection_row(
+    connection, signer, 'my-db', connection_seed,
+    json.dumps({"message_id": "123", "message": "Hello friend!", "timestamp": 1234567890})
+)
+```
+
+---
+
+#### `fetch_user_connections()`
+
+Obtiene todas las conexiones (solicitudes de amistad) de un usuario analizando el historial de transacciones de su PDA de UserState. Cada conexión incluye su `db_root_id`, que identifica a qué aplicación pertenece la conexión.
+
+| **Parámetros** | `user_pubkey`: clave pública del usuario (str o Pubkey)<br/>`limit`: número máximo de transacciones a obtener (opcional)<br/>`before`: firma para paginar desde (opcional)<br/>`speed`: perfil de límite de velocidad (opcional) |
+|----------------|--------------------------|
+| **Retorna** | Lista de dicts de conexión con db_root_id, connection_pda, party_a, party_b, status, requester, blocker, timestamp |
+
+```python
+from iqlabs import reader
+
+# Obtener todas las conexiones (¡de todas las aplicaciones!)
+connections = await reader.fetch_user_connections(
+    my_pubkey,
+    speed="light",
+    limit=100
+)
+
+# Filtrar por estado
+pending_requests = [c for c in connections if c['status'] == 'pending']
+friends = [c for c in connections if c['status'] == 'approved']
+blocked = [c for c in connections if c['status'] == 'blocked']
+
+# Verificar detalles de la conexión
+for conn in connections:
+    print(f"Party A: {conn['party_a']} <-> Party B: {conn['party_b']}, status: {conn['status']}")
+```
+
+---
+
+### Gestión de tablas
+
+#### `write_row()`
+
+| **Parámetros** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: ID de base de datos (bytes o str)<br/>`table_seed`: nombre de la tabla (bytes o str)<br/>`row_json`: datos JSON de la fila (str)<br/>`skip_confirmation`: omitir confirmación de tx (por defecto: False) |
+|----------------|--------------------------|
+| **Retorna** | Firma de transacción (str) |
+
+```python
+from iqlabs import writer
+import json
+
+# Escribir la primera fila para crear la tabla
+await writer.write_row(connection, signer, 'my-db', 'users', json.dumps({
+    "id": 1, "name": "Alice", "email": "alice@example.com"
+}))
+
+# Agregar otra fila a la misma tabla
+await writer.write_row(connection, signer, 'my-db', 'users', json.dumps({
+    "id": 2, "name": "Bob", "email": "bob@example.com"
+}))
+```
+
+---
+
+#### `read_table_rows()`
+
+| **Parámetros** | `account`: PDA de la tabla (Pubkey o str)<br/>`before`: cursor de firma para paginación (opcional)<br/>`limit`: número máximo de filas a obtener (opcional)<br/>`speed`: perfil de límite de velocidad (opcional) |
+|----------------|--------------------------|
+| **Retorna** | `list[dict]` |
+
+```python
+from iqlabs import reader
+
+# Uso básico
+rows = await reader.read_table_rows(table_pda, limit=50)
+
+# Paginación basada en cursor
+older_rows = await reader.read_table_rows(table_pda, limit=50, before="sig...")
+```
+
+---
+
+#### `get_tablelist_from_root()`
+
+| **Parámetros** | `connection`: AsyncClient<br/>`db_root_id`: ID de base de datos (bytes o str) |
+|----------------|--------------------------|
+| **Retorna** | dict con `root_pda`, `creator`, `table_seeds`, `global_table_seeds` |
+
+```python
+from iqlabs import reader
+
+result = await reader.get_tablelist_from_root(connection, 'my-db')
+print('Creator:', result['creator'])
+print('Table seeds:', result['table_seeds'])
+```
+
+---
+
+#### `fetch_inventory_transactions()`
+
+| **Parámetros** | `public_key`: clave pública del usuario (Pubkey)<br/>`limit`: cantidad máxima (int)<br/>`before`: cursor de paginación (opcional, str) |
+|----------------|--------------------------|
+| **Retorna** | Lista de transacciones |
+
+```python
+from iqlabs import reader
+from solders.pubkey import Pubkey
+import json
+
+my_files = await reader.fetch_inventory_transactions(my_pubkey, 20)
+for tx in my_files:
+    metadata = None
+    try:
+        metadata = json.loads(tx['metadata'])
+    except:
+        metadata = None
+
+    if metadata and 'data' in metadata:
+        inline_data = metadata['data'] if isinstance(metadata['data'], str) else json.dumps(metadata['data'])
+        print(f"Inline data: {inline_data}")
+    else:
+        print(f"Signature: {tx['signature']}")
+```
+
+---
+
+### Configuración del entorno
+
+#### `set_rpc_url()`
+
+| **Parámetros** | `url`: URL de RPC de Solana (str) |
+|----------------|--------------------------|
+| **Retorna** | None |
+
+```python
+from iqlabs import set_rpc_url
+
+set_rpc_url('https://your-rpc.example.com')
+```
+
+---
+
+## Funciones avanzadas
+
+<Warning>
+Estas son funciones de bajo nivel del SDK. No son necesarias para el uso típico, pero son útiles al crear funciones personalizadas o al depurar.
+</Warning>
+
+### Funciones de escritura
+
+#### `manage_row_data()`
+
+Función unificada que maneja tanto escrituras de filas de tablas como escrituras de filas de conexión. Detecta automáticamente si debe escribir en una tabla o en una conexión basándose en los PDAs existentes.
+
+| **Módulo** | `writer` |
+|------------|----------|
+| **Parámetros** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: ID de base de datos (bytes o str)<br/>`seed`: semilla de tabla o conexión (bytes o str)<br/>`row_json`: datos JSON de la fila (str)<br/>`table_name`: requerido para ediciones de tabla (opcional)<br/>`target_tx`: tx de referencia para ediciones de tabla (opcional) |
+| **Retorna** | Firma de transacción (str) |
+| **Caso de uso** | Gestión personalizada de filas, actualización de filas existentes |
+
+```python
+from iqlabs import writer
+import json
+
+await writer.manage_row_data(
+    connection, signer,
+    'my-db',       # db_root_id
+    'users',       # seed (table seed)
+    json.dumps({"id": 1, "name": "Updated Name"}),
+    table_name='users',
+    target_tx=original_tx_sig
+)
+```
+
+---
+
+### Funciones de lectura
+
+#### `read_user_state()`
+
+Lee el PDA de UserState para un usuario dado.
+
+| **Módulo** | `reader` |
+|------------|----------|
+| **Parámetros** | `user_pubkey`: clave pública del usuario (str) |
+| **Retorna** | dict con `owner`, `metadata`, `total_session_files`, `profile_data` |
+| **Caso de uso** | Obtener datos de perfil del usuario, verificar conteos de subidas |
+
+```python
+from iqlabs import reader
+
+user_state = await reader.read_user_state(user_pubkey)
+print('Owner:', user_state['owner'])
+print('Session files:', user_state['total_session_files'])
+print('Profile data:', user_state['profile_data'])
+```
+
+---
+
+#### `read_inventory_metadata()`
+
+Lee los metadatos asociados con una transacción de inventario de un usuario.
+
+| **Módulo** | `reader` |
+|------------|----------|
+| **Parámetros** | `tx_signature`: firma de transacción (str) |
+| **Retorna** | dict con metadatos |
+| **Caso de uso** | Extraer metadatos de archivos de transacciones de inventario |
+
+```python
+from iqlabs import reader
+
+result = await reader.read_inventory_metadata(tx_signature)
+print('Metadata:', result)
+```
+
+---
+
+#### `get_session_pda_list()`
+
+Recupera una lista de direcciones PDA de sesión para un usuario.
+
+| **Módulo** | `reader` |
+|------------|----------|
+| **Parámetros** | `user_pubkey`: clave pública del usuario (str) |
+| **Retorna** | `list[str]` (cadenas base58 de PDAs de sesión) |
+| **Caso de uso** | Gestión de sesiones, seguimiento de sesiones activas |
+
+```python
+from iqlabs import reader
+
+sessions = await reader.get_session_pda_list(user_pubkey)
+for pda in sessions:
+    print(f"Session PDA: {pda}")
+```
+
+---
+
+#### Funciones PDA del contrato
+
+Funciones de bajo nivel para derivación de PDAs disponibles en el módulo `contract`.
+
+| **Módulo** | `contract` |
+|------------|----------|
+| **Caso de uso** | Derivación personalizada de PDAs, búsqueda de cuentas |
+
+```python
+from iqlabs import contract
+from solders.pubkey import Pubkey
+
+program_id = contract.get_program_id()
+db_root_pda = contract.get_db_root_pda(db_root_id, program_id)
+table_pda = contract.get_table_pda(db_root_pda, table_seed, program_id)
+user_pda = contract.get_user_pda(user_pubkey, program_id)
+session_pda = contract.get_session_pda(user_pubkey, seq=0, program_id=program_id)
+connection_pda = contract.get_connection_table_pda(db_root_pda, connection_seed, program_id)
+```
+
+---
+
+### Funciones de utilidad
+
+#### `derive_dm_seed()`
+
+Deriva una semilla determinista para mensajería directa (DM) entre dos usuarios. Ordena las dos claves públicas alfabéticamente y genera un hash de `"menor:mayor"` con Keccak-256.
+
+| **Módulo** | `utils` |
+|------------|----------|
+| **Parámetros** | `user_a`: clave pública del primer usuario (str)<br/>`user_b`: clave pública del segundo usuario (str) |
+| **Retorna** | bytes (semilla de 32 bytes) |
+| **Caso de uso** | Crear identificadores de conexión consistentes, configuración de canal de DM |
+
+```python
+from iqlabs.sdk.utils.seed import derive_dm_seed
+
+seed1 = derive_dm_seed(wallet_a, wallet_b)
+seed2 = derive_dm_seed(wallet_b, wallet_a)
+print(seed1 == seed2)  # True — order doesn't matter
+```
+
+---
+
+#### `to_seed_bytes()`
+
+Convierte un identificador de semilla a bytes. Si la entrada es una cadena hexadecimal de 64 caracteres, se pasa tal cual. De lo contrario, se aplica un hash Keccak-256.
+
+| **Módulo** | `utils` |
+|------------|----------|
+| **Parámetros** | `value`: cadena o bytes de semilla |
+| **Retorna** | bytes |
+| **Caso de uso** | Derivación personalizada de PDAs, manipulación de semillas de bajo nivel |
+
+```python
+from iqlabs.sdk.utils.seed import to_seed_bytes
+from solders.pubkey import Pubkey
+
+seed_string = 'my-custom-seed'
+seed_bytes = to_seed_bytes(seed_string)
+
+pda, bump = Pubkey.find_program_address(
+    [seed_bytes, other_seed],
+    program_id
+)
+```
+
+---

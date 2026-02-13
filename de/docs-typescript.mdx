@@ -1,0 +1,543 @@
+---
+title: "Entwicklerdokumentation"
+description: "Kernkonzepte und Funktionen für das IQLabs SDK"
+---
+
+<Note>
+Dieses Dokument ist in Arbeit und wird weiter verfeinert.
+</Note>
+
+## Installation
+
+```bash
+npm i @iqlabs-official/solana-sdk
+```
+
+---
+
+## Kernkonzepte
+
+Dies sind die wichtigsten Konzepte, die du kennen solltest, bevor du das IQLabs SDK verwendest.
+
+---
+
+### Datenspeicherung (Code In)
+
+So speicherst du beliebige Daten (Dateien, Text, JSON) on-chain.
+
+#### Wie wird es gespeichert?
+
+Abhängig von der Datengröße wählt das SDK die optimale Methode:
+
+- **Kleine Daten (&lt; 900 Bytes)**: sofort speichern, am schnellsten
+- **Mittlere Daten (&lt; 8.5 KB)**: in mehrere Transaktionen aufteilen
+- **Große Daten (&gt;= 8.5 KB)**: parallel hochladen für mehr Geschwindigkeit
+
+#### Wichtige zugehörige Funktionen
+
+- [`codeIn()`](#codein): Daten hochladen und eine Transaktions-ID erhalten
+- [`readCodeIn()`](#readcodein): Daten anhand einer Transaktions-ID auslesen
+
+---
+
+### Benutzerstatus-PDA
+
+Ein On-Chain-Profilkonto für einen Nutzer.
+
+#### Was wird gespeichert?
+
+- Profilinformationen (Name, Profilbild, Bio usw.)
+- Anzahl hochgeladener Dateien
+- Einträge zu Freundschaftsanfragen
+
+<Note>
+Freundschaftsanfragen werden nicht als Werte im PDA gespeichert; sie werden als Transaktionen gesendet.
+</Note>
+
+#### Wann wird es erstellt?
+
+Es wird automatisch erstellt, wenn du [`codeIn()`](#codein) zum ersten Mal aufrufst. Es ist keine zusätzliche Einrichtung erforderlich, aber der erste Nutzer muss möglicherweise zweimal signieren.
+
+---
+
+### Verbindungs-PDA
+
+Ein On-Chain-Konto, das Beziehungen zwischen zwei Nutzern verwaltet (Freunde, Nachrichten usw.).
+
+#### Welche Zustände kann es haben?
+
+- **pending**: Eine Freundschaftsanfrage wurde gesendet, aber noch nicht akzeptiert
+- **approved**: Die Anfrage wurde akzeptiert und die Nutzer sind verbunden
+- **blocked**: Eine Seite hat die andere blockiert
+
+<Warning>
+Eine blockierte Verbindung kann nur von der blockierenden Person aufgehoben werden.
+</Warning>
+
+#### Wichtige zugehörige Funktionen
+
+- [`requestConnection()`](#requestconnection): Freundschaftsanfrage senden (erstellt pending)
+- [`manageConnection()`](#manageconnection): Anfrage annehmen/ablehnen/blockieren/entsperren
+- [`readConnection()`](#readconnection): aktuellen Beziehungsstatus prüfen
+- [`writeConnectionRow()`](#writeconnectionrow): Nachrichten/Daten mit einem verbundenen Freund austauschen
+- [`fetchUserConnections()`](#fetchuserconnections): alle Verbindungen abrufen (gesendete & empfangene Anfragen)
+
+---
+
+### Datenbanktabellen
+
+JSON-Daten in Tabellen wie in einer Datenbank speichern.
+
+#### Wie werden Tabellen erstellt?
+
+Es gibt keine spezielle "create table"-Funktion. Der erste Schreibvorgang über [`writeRow()`](#writerow) erstellt die Tabelle automatisch.
+
+<Note>
+Eine Tabelle wird eindeutig durch die Kombination aus `dbRootId` und `tableSeed` (Tabellenname) identifiziert.
+</Note>
+
+#### Wichtige zugehörige Funktionen
+
+- [`writeRow()`](#writerow): eine neue Zeile hinzufügen (erstellt die Tabelle, falls sie fehlt)
+- [`readTableRows()`](#readtablerows): Zeilen aus einer Tabelle lesen
+- [`getTablelistFromRoot()`](#gettablelistfromroot): alle Tabellen in einer Datenbank auflisten
+- [`fetchInventoryTransactions()`](#fetchinventorytransactions): hochgeladene Dateien auflisten
+
+---
+
+## Funktionsdetails
+
+### Datenspeicherung und -abruf
+
+#### `codeIn()`
+
+| **Parameter** | `input`: `{ connection, signer }`-Objekt<br/>`data`: hochzuladende Daten (string oder string[])<br/>`filename`: optionaler Dateiname (string)<br/>`method`: Upload-Methode (number, Standard: 0)<br/>`filetype`: Dateityp-Hinweis (string, Standard: '')<br/>`onProgress`: optionaler Fortschritts-Callback `(percent: number) => void` |
+|----------------|--------------------------|
+| **Rückgabe** | Transaktionssignatur (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Daten hochladen
+const signature = await iqlabs.writer.codeIn(
+  { connection, signer },
+  'Hello, blockchain!'
+);
+
+// Mit Dateiname hochladen
+const sig = await iqlabs.writer.codeIn(
+  { connection, signer },
+  'file contents here',
+  'hello.txt'
+);
+```
+
+---
+
+#### `readCodeIn()`
+
+| **Parameter** | `txSignature`: Transaktionssignatur (string)<br/>`speed`: Rate-Limit-Profil (optional, 'light' \| 'medium' \| 'heavy' \| 'extreme')<br/>`onProgress`: optionaler Fortschritts-Callback `(percent: number) => void` |
+|----------------|--------------------------|
+| **Rückgabe** | `{ metadata: string, data: string \| null }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const result = await iqlabs.reader.readCodeIn('5Xg7...');
+console.log(result.data);      // 'Hello, blockchain!'
+console.log(result.metadata);  // JSON-String mit Datei-Metadaten
+```
+
+---
+
+### Verbindungsverwaltung
+
+#### `requestConnection()`
+
+| **Parameter** | `connection`: Solana-RPC-Verbindung<br/>`signer`: Signer<br/>`dbRootId`: Datenbank-ID (Uint8Array oder string)<br/>`partyA`: Public Key des ersten Nutzers (string)<br/>`partyB`: Public Key des zweiten Nutzers (string)<br/>`tableName`: Name der Verbindungstabelle (string oder Uint8Array)<br/>`columns`: Spaltenliste (Array\<string \| Uint8Array\>)<br/>`idCol`: ID-Spalte (string oder Uint8Array)<br/>`extKeys`: Erweiterungsschlüssel (Array\<string \| Uint8Array\>) |
+|----------------|--------------------------|
+| **Rückgabe** | Transaktionssignatur (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+await iqlabs.writer.requestConnection(
+  connection, signer, 'my-db',
+  myWalletAddress, friendWalletAddress,
+  'dm_table', ['message', 'timestamp'], 'message_id', []
+);
+```
+
+---
+
+#### `manageConnection()`
+
+<Note>
+Für diese Funktion gibt es keinen High-Level-SDK-Wrapper. Verwende den Instruction-Builder auf Vertragsebene direkt.
+</Note>
+
+| **Parameter** | `builder`: InstructionBuilder<br/>`accounts`: `{ db_root, connection_table, signer }` (PublicKey)<br/>`args`: `{ db_root_id, connection_seed, new_status }` |
+|----------------|--------------------------|
+| **Rückgabe** | TransactionInstruction |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const builder = iqlabs.contract.createInstructionBuilder(iqlabs.contract.PROGRAM_ID);
+
+// Eine Freundschaftsanfrage genehmigen
+const approveIx = iqlabs.contract.manageConnectionInstruction(
+  builder,
+  { db_root, connection_table, signer: myPubkey },
+  { db_root_id, connection_seed, new_status: iqlabs.contract.CONNECTION_STATUS_APPROVED }
+);
+
+// Einen Nutzer blockieren
+const blockIx = iqlabs.contract.manageConnectionInstruction(
+  builder,
+  { db_root, connection_table, signer: myPubkey },
+  { db_root_id, connection_seed, new_status: iqlabs.contract.CONNECTION_STATUS_BLOCKED }
+);
+```
+
+---
+
+#### `readConnection()`
+
+| **Parameter** | `dbRootId`: Datenbank-ID (Uint8Array oder string)<br/>`partyA`: erste Wallet (string)<br/>`partyB`: zweite Wallet (string) |
+|----------------|--------------------------|
+| **Rückgabe** | `{ status: 'pending' \| 'approved' \| 'blocked' \| 'unknown', requester: 'a' \| 'b', blocker: 'a' \| 'b' \| 'none' }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const { status, requester, blocker } = await iqlabs.reader.readConnection('my-db', partyA, partyB);
+console.log(status); // 'pending' | 'approved' | 'blocked'
+```
+
+---
+
+#### `writeConnectionRow()`
+
+| **Parameter** | `connection`: Solana-RPC-Verbindung<br/>`signer`: Signer<br/>`dbRootId`: Datenbank-ID (Uint8Array oder string)<br/>`connectionSeed`: Verbindungs-Seed (Uint8Array oder string)<br/>`rowJson`: JSON-Daten (string) |
+|----------------|--------------------------|
+| **Rückgabe** | Transaktionssignatur (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+await iqlabs.writer.writeConnectionRow(
+  connection, signer, 'my-db', connectionSeed,
+  JSON.stringify({ message_id: '123', message: 'Hello friend!', timestamp: Date.now() })
+);
+```
+
+---
+
+#### `fetchUserConnections()`
+
+Ruft alle Verbindungen (Freundschaftsanfragen) eines Nutzers ab, indem der Transaktionsverlauf des UserState-PDA analysiert wird. Jede Verbindung enthält ihre `dbRootId`, die angibt, zu welcher App die Verbindung gehört.
+
+| **Parameter** | `userPubkey`: öffentlicher Schlüssel des Nutzers (string oder PublicKey)<br/>`options`: optionale Einstellungen |
+|----------------|--------------------------|
+| **Optionen** | `limit`: maximale Anzahl abzurufender Transaktionen<br/>`before`: Signatur, ab der paginiert wird<br/>`speed`: Rate-Limit-Profil ('light' \| 'medium' \| 'heavy' \| 'extreme') |
+| **Rückgabe** | Array von `{ dbRootId, connectionPda, partyA, partyB, status, requester, blocker, timestamp }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const connections = await iqlabs.reader.fetchUserConnections(myPubkey, {
+  speed: 'light',
+  limit: 100
+});
+
+// Nach Status filtern
+const pendingRequests = connections.filter(c => c.status === 'pending');
+const friends = connections.filter(c => c.status === 'approved');
+const blocked = connections.filter(c => c.status === 'blocked');
+
+// Verbindungsdetails prüfen
+connections.forEach(conn => {
+  console.log(`${conn.partyA} <-> ${conn.partyB}, status: ${conn.status}`);
+});
+```
+
+---
+
+### Tabellenverwaltung
+
+#### `writeRow()`
+
+| **Parameter** | `connection`: Solana-RPC-Verbindung<br/>`signer`: Signer<br/>`dbRootId`: Datenbank-ID (Uint8Array oder string)<br/>`tableSeed`: Tabellenname (Uint8Array oder string)<br/>`rowJson`: JSON-Zeilen-Daten (string)<br/>`skipConfirmation`: Transaktionsbestätigung überspringen (boolean, Standard: false) |
+|----------------|--------------------------|
+| **Rückgabe** | Transaktionssignatur (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Erste Zeile schreiben, um die Tabelle zu erstellen
+await iqlabs.writer.writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
+  id: 1, name: 'Alice', email: 'alice@example.com'
+}));
+
+// Weitere Zeile in dieselbe Tabelle hinzufügen
+await iqlabs.writer.writeRow(connection, signer, 'my-db', 'users', JSON.stringify({
+  id: 2, name: 'Bob', email: 'bob@example.com'
+}));
+```
+
+---
+
+#### `readTableRows()`
+
+| **Parameter** | `account`: Tabellen-PDA (PublicKey oder string)<br/>`options`: optionale Einstellungen |
+|----------------|--------------------------|
+| **Optionen** | `limit`: maximale Anzahl abzurufender Zeilen<br/>`before`: Signatur-Cursor für Paginierung<br/>`signatures`: vorgesammelte Signatur-Array (überspringt RPC-Abfrage, wenn angegeben)<br/>`speed`: Rate-Limit-Profil ('light', 'medium', 'heavy', 'extreme') |
+| **Rückgabe** | `Array<Record<string, unknown>>` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Einfache Verwendung
+const rows = await iqlabs.reader.readTableRows(tablePda, { limit: 50 });
+
+// Cursor-basierte Paginierung
+const olderRows = await iqlabs.reader.readTableRows(tablePda, { limit: 50, before: 'sig...' });
+
+// Mit vorgesammelten Signaturen (überspringt Signatur-Abfrage, dekodiert direkt)
+const sigs = await iqlabs.reader.collectSignatures(tablePda);
+const targetIdx = sigs.indexOf('abc123');
+const slice = sigs.slice(targetIdx - 25, targetIdx + 25);
+const rows = await iqlabs.reader.readTableRows(tablePda, { signatures: slice });
+```
+
+---
+
+#### `collectSignatures()`
+
+Sammelt alle (oder bis zu `maxSignatures`) Transaktionssignaturen für ein Konto. Leichtgewichtig -- keine Transaktionsdekodierung, nur Signatur-Strings. Nützlich für Paginierung: die vollständige Signaturliste einmal abrufen, dann aufteilen und an `readTableRows()` übergeben.
+
+| **Parameter** | `account`: Tabellen-PDA (PublicKey oder string)<br/>`maxSignatures`: maximale Anzahl zu sammelnder Signaturen (optional, sammelt alle wenn weggelassen) |
+|----------------|--------------------------|
+| **Rückgabe** | `string[]` (Signatur-Strings) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Alle Signaturen sammeln
+const allSigs = await iqlabs.reader.collectSignatures(tablePda);
+
+// Bis zu 3000 Signaturen sammeln
+const sigs = await iqlabs.reader.collectSignatures(tablePda, 3000);
+
+// Mit readTableRows verwenden, um ab der Mitte zu lesen
+const targetIdx = sigs.indexOf('abc123');
+const chunk = sigs.slice(targetIdx - 25, targetIdx + 25);
+const rows = await iqlabs.reader.readTableRows(tablePda, { signatures: chunk });
+```
+
+---
+
+#### `getTablelistFromRoot()`
+
+| **Parameter** | `connection`: Solana-RPC-Verbindung<br/>`dbRootId`: Datenbank-ID (Uint8Array oder string) |
+|----------------|--------------------------|
+| **Rückgabe** | `{ rootPda: PublicKey, creator: string \| null, tableSeeds: string[], globalTableSeeds: string[] }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const result = await iqlabs.reader.getTablelistFromRoot(connection, 'my-db');
+console.log('Ersteller:', result.creator);
+console.log('Tabellen-Seeds:', result.tableSeeds);
+```
+
+---
+
+#### `fetchInventoryTransactions()`
+
+| **Parameter** | `publicKey`: öffentlicher Schlüssel des Nutzers (PublicKey)<br/>`limit`: maximale Anzahl (number)<br/>`before`: Paginierungs-Cursor (optional, string) |
+|----------------|--------------------------|
+| **Rückgabe** | Transaktions-Array |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const myFiles = await iqlabs.reader.fetchInventoryTransactions(myPubkey, 20);
+myFiles.forEach(tx => {
+  let metadata: { data?: unknown } | null = null;
+  try {
+    metadata = JSON.parse(tx.metadata);
+  } catch {
+    metadata = null;
+  }
+
+  if (metadata && metadata.data !== undefined) {
+    const inlineData = typeof metadata.data === 'string'
+      ? metadata.data
+      : JSON.stringify(metadata.data);
+    console.log(`Inline-Daten: ${inlineData}`);
+  } else {
+    console.log(`Signatur: ${tx.signature}`);
+  }
+});
+```
+
+---
+
+### Umgebungseinstellungen
+
+#### `setRpcUrl()`
+
+| **Parameter** | `url`: Solana-RPC-URL (string) |
+|----------------|--------------------------|
+| **Rückgabe** | void |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+iqlabs.utils.setRpcUrl('https://your-rpc.example.com');
+```
+
+---
+
+## Erweiterte Funktionen
+
+<Warning>
+Dies sind Low-Level-SDK-Funktionen. Für den typischen Gebrauch nicht nötig, aber hilfreich beim Erstellen eigener Features oder beim Debugging.
+</Warning>
+
+### Writer-Funktionen
+
+#### `manageRowData()`
+
+Einheitliche Funktion, die sowohl Tabellen-Zeilen-Schreibvorgänge als auch Verbindungs-Zeilen-Schreibvorgänge verarbeitet. Erkennt automatisch, ob in eine Tabelle oder Verbindung geschrieben werden soll, basierend auf vorhandenen PDAs.
+
+| **Modul** | `writer` |
+|------------|----------|
+| **Parameter** | `connection`: Solana-RPC-Verbindung<br/>`signer`: Signer<br/>`dbRootId`: Datenbank-ID (Uint8Array oder string)<br/>`seed`: Tabellen- oder Verbindungs-Seed (Uint8Array oder string)<br/>`rowJson`: JSON-Zeilen-Daten (string)<br/>`tableName`: erforderlich für Tabellenbearbeitungen (optional, string oder Uint8Array)<br/>`targetTx`: Referenz-Transaktion für Tabellenbearbeitungen (optional, string oder Uint8Array) |
+| **Rückgabe** | Transaktionssignatur (string) |
+| **Anwendungsfall** | Benutzerdefinierte Zeilenverwaltung, bestehende Zeilen aktualisieren |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+await iqlabs.writer.manageRowData(
+  connection, signer,
+  'my-db',       // dbRootId
+  'users',       // seed (Tabellen-Seed)
+  JSON.stringify({ id: 1, name: 'Updated Name' }),
+  'users',       // tableName
+  originalTxSig  // targetTx
+);
+```
+
+---
+
+### Reader-Funktionen
+
+#### `readUserState()`
+
+Liest den UserState-PDA eines Nutzers.
+
+| **Modul** | `reader` |
+|------------|----------|
+| **Parameter** | `userPubkey`: öffentlicher Schlüssel des Nutzers (string) |
+| **Rückgabe** | `{ owner: string, metadata: string \| null, totalSessionFiles: bigint, profileData?: string }` |
+| **Anwendungsfall** | Profildaten abrufen, Upload-Zählung prüfen |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const userState = await iqlabs.reader.readUserState(userPubkey);
+console.log('Besitzer:', userState.owner);
+console.log('Sitzungsdateien:', userState.totalSessionFiles);
+console.log('Profildaten:', userState.profileData);
+```
+
+---
+
+#### `readInventoryMetadata()`
+
+Liest Metadaten, die mit einer Inventar-Transaktion eines Nutzers verknüpft sind.
+
+| **Modul** | `reader` |
+|------------|----------|
+| **Parameter** | `txSignature`: Transaktionssignatur (string) |
+| **Rückgabe** | `{ onChainPath: string, metadata: string }` |
+| **Anwendungsfall** | Datei-Metadaten aus Inventar-Transaktionen extrahieren |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const result = await iqlabs.reader.readInventoryMetadata(txSignature);
+console.log('Pfad:', result.onChainPath);
+console.log('Metadaten:', result.metadata);
+```
+
+---
+
+#### `getSessionPdaList()`
+
+Ruft eine Liste von Session-PDA-Adressen für einen Nutzer ab.
+
+| **Modul** | `reader` |
+|------------|----------|
+| **Parameter** | `userPubkey`: öffentlicher Schlüssel des Nutzers (string) |
+| **Rückgabe** | `string[]` (Session-PDA-Base58-Strings) |
+| **Anwendungsfall** | Sitzungsverwaltung, Nachverfolgung aktiver Sitzungen |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const sessions = await iqlabs.reader.getSessionPdaList(userPubkey);
+sessions.forEach(pda => {
+  console.log(`Session-PDA: ${pda}`);
+});
+```
+
+---
+
+### Hilfsfunktionen
+
+#### `deriveDmSeed()`
+
+Leitet einen deterministischen Seed für Direktnachrichten (DM) zwischen zwei Nutzern ab. Sortiert die beiden Pubkeys alphabetisch und hasht mit keccak256.
+
+| **Modul** | `utils` |
+|------------|----------|
+| **Parameter** | `userA`: Public Key des ersten Nutzers (string)<br/>`userB`: Public Key des zweiten Nutzers (string) |
+| **Rückgabe** | `Uint8Array` (Seed-Bytes) |
+| **Anwendungsfall** | Konsistente Verbindungs-IDs erstellen, DM-Kanal einrichten |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const seed1 = iqlabs.utils.deriveDmSeed(walletA, walletB);
+const seed2 = iqlabs.utils.deriveDmSeed(walletB, walletA);
+// seed1 und seed2 sind identisch -- Reihenfolge spielt keine Rolle
+```
+
+---
+
+#### `toSeedBytes()`
+
+Konvertiert einen Seed-Identifier in Bytes. Wenn die Eingabe ein 64-Zeichen-Hex-String ist, werden die Hex-Bytes direkt zurückgegeben. Andernfalls wird ein keccak256-Hash angewendet.
+
+| **Modul** | `utils` |
+|------------|----------|
+| **Parameter** | `value`: Seed-String oder Uint8Array |
+| **Rückgabe** | `Uint8Array` |
+| **Anwendungsfall** | Benutzerdefinierte PDA-Ableitung, Low-Level-Seed-Manipulation |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const seedString = 'my-custom-seed';
+const seedBytes = iqlabs.utils.toSeedBytes(seedString);
+
+const [pda, bump] = PublicKey.findProgramAddressSync(
+  [seedBytes, otherSeed],
+  programId
+);
+```
