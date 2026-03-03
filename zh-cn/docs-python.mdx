@@ -261,6 +261,24 @@ for conn in connections:
 
 ---
 
+#### `update_user_metadata()`
+
+| **参数** | `connection`：AsyncClient<br>`signer`：Keypair<br>`db_root_id`：数据库 ID（bytes 或 str）<br>`meta`：要存储的元数据（bytes 或 str） |
+|----------|--------------------------|
+| **返回** | 交易签名（str） |
+
+**示例：**
+```python
+from iqlabs import writer
+
+# 将个人资料元数据存储到区块链
+tx_sig = await writer.update_user_metadata(
+    connection, signer, 'my-db', meta_tx_signature
+)
+```
+
+---
+
 ### 表管理
 
 #### `write_row()`

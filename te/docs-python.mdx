@@ -261,6 +261,24 @@ for conn in connections:
 
 ---
 
+#### `update_user_metadata()`
+
+| **పారామీటర్లు** | `connection`: AsyncClient<br>`signer`: Keypair<br>`db_root_id`: డేటాబేస్ ID (bytes లేదా str)<br>`meta`: నిల్వ చేయవలసిన మెటాడేటా (bytes లేదా str) |
+|----------|--------------------------|
+| **రిటర్న్** | ట్రాన్సాక్షన్ సిగ్నేచర్ (str) |
+
+**ఉదాహరణ:**
+```python
+from iqlabs import writer
+
+# బ్లాక్‌చెయిన్‌లో ప్రొఫైల్ మెటాడేటా నిల్వ చేయండి
+tx_sig = await writer.update_user_metadata(
+    connection, signer, 'my-db', meta_tx_signature
+)
+```
+
+---
+
 ### టేబుల్ నిర్వహణ
 
 #### `write_row()`

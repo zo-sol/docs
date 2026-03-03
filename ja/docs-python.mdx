@@ -261,6 +261,24 @@ for conn in connections:
 
 ---
 
+#### `update_user_metadata()`
+
+| **パラメータ** | `connection`: AsyncClient<br>`signer`: Keypair<br>`db_root_id`: データベース ID（bytes または str）<br>`meta`: 保存するメタデータ（bytes または str） |
+|----------|--------------------------|
+| **戻り値** | トランザクション署名（str） |
+
+**例:**
+```python
+from iqlabs import writer
+
+# プロフィールメタデータをブロックチェーンに保存する
+tx_sig = await writer.update_user_metadata(
+    connection, signer, 'my-db', meta_tx_signature
+)
+```
+
+---
+
 ### テーブル管理
 
 #### `write_row()`

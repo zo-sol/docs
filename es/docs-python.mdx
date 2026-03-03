@@ -261,6 +261,24 @@ for conn in connections:
 
 ---
 
+#### `update_user_metadata()`
+
+| **Parámetros** | `connection`: AsyncClient<br>`signer`: Keypair<br>`db_root_id`: ID de base de datos (bytes o str)<br>`meta`: metadatos a almacenar (bytes o str) |
+|----------|--------------------------|
+| **Devuelve** | Firma de transacción (str) |
+
+**Ejemplo:**
+```python
+from iqlabs import writer
+
+# Guardar metadatos de perfil en la blockchain
+tx_sig = await writer.update_user_metadata(
+    connection, signer, 'my-db', meta_tx_signature
+)
+```
+
+---
+
 ### Gestión de tablas
 
 #### `write_row()`
