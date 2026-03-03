@@ -264,6 +264,23 @@ connections.forEach(conn => {
 
 ---
 
+#### `updateUserMetadata()`
+
+| **Paramètres** | `connection`: connexion RPC Solana<br/>`signer`: Signer<br/>`dbRootId`: ID de base de données (Uint8Array ou string)<br/>`meta`: métadonnées à stocker (Uint8Array ou string) |
+|----------------|--------------------------|
+| **Retourne** | Signature de transaction (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Stocker les métadonnées de profil sur la blockchain
+const txSig = await iqlabs.writer.updateUserMetadata(
+  connection, signer, 'my-db', metaTxSignature
+);
+```
+
+---
+
 ### Gestion des tables
 
 #### `writeRow()`

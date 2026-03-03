@@ -264,6 +264,23 @@ connections.forEach(conn => {
 
 ---
 
+#### `updateUserMetadata()`
+
+| **파라미터** | `connection`: Solana RPC 연결<br/>`signer`: 서명 지갑<br/>`dbRootId`: 데이터베이스 ID (Uint8Array 또는 string)<br/>`meta`: 저장할 메타데이터 (Uint8Array 또는 string) |
+|-------------|--------------------------|
+| **반환값** | 트랜잭션 서명 (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// 프로필 메타데이터를 블록체인에 저장
+const txSig = await iqlabs.writer.updateUserMetadata(
+  connection, signer, 'my-db', metaTxSignature
+);
+```
+
+---
+
 ### 테이블 관리
 
 #### `writeRow()`

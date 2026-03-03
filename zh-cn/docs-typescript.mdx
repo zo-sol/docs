@@ -264,6 +264,23 @@ connections.forEach(conn => {
 
 ---
 
+#### `updateUserMetadata()`
+
+| **参数** | `connection`：Solana RPC 连接<br/>`signer`：签名者<br/>`dbRootId`：数据库 ID（Uint8Array 或 string）<br/>`meta`：要存储的元数据（Uint8Array 或 string） |
+|----------------|--------------------------|
+| **返回** | 交易签名（string） |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// 将个人资料元数据存储到区块链
+const txSig = await iqlabs.writer.updateUserMetadata(
+  connection, signer, 'my-db', metaTxSignature
+);
+```
+
+---
+
 ### 表管理
 
 #### `writeRow()`
