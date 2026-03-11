@@ -285,7 +285,7 @@ const txSig = await iqlabs.writer.updateUserMetadata(
 
 #### `writeRow()`
 
-| **参数** | `connection`：Solana RPC 连接<br/>`signer`：签名者<br/>`dbRootId`：数据库 ID（Uint8Array 或 string）<br/>`tableSeed`：表名（Uint8Array 或 string）<br/>`rowJson`：JSON 行数据（string）<br/>`skipConfirmation`：跳过交易确认（boolean，默认：false） |
+| **参数** | `connection`：Solana RPC 连接<br/>`signer`：签名者<br/>`dbRootId`：数据库 ID（Uint8Array 或 string）<br/>`tableSeed`：表名（Uint8Array 或 string）<br/>`rowJson`：JSON 行数据（string）<br/>`skipConfirmation`：跳过交易确认（boolean，默认：false）<br/>`remainingAccounts`：作为只读引用账户追加的 PublicKey 数组（可选，例如用于 feed PDA 索引） |
 |----------------|--------------------------|
 | **返回** | 交易签名（string） |
 

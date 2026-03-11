@@ -285,7 +285,7 @@ const txSig = await iqlabs.writer.updateUserMetadata(
 
 #### `writeRow()`
 
-| **Parameter** | `connection`: Solana-RPC-Verbindung<br/>`signer`: Signer<br/>`dbRootId`: Datenbank-ID (Uint8Array oder string)<br/>`tableSeed`: Tabellenname (Uint8Array oder string)<br/>`rowJson`: JSON-Zeilen-Daten (string)<br/>`skipConfirmation`: Transaktionsbestätigung überspringen (boolean, Standard: false) |
+| **Parameter** | `connection`: Solana-RPC-Verbindung<br/>`signer`: Signer<br/>`dbRootId`: Datenbank-ID (Uint8Array oder string)<br/>`tableSeed`: Tabellenname (Uint8Array oder string)<br/>`rowJson`: JSON-Zeilen-Daten (string)<br/>`skipConfirmation`: Transaktionsbestätigung überspringen (boolean, Standard: false)<br/>`remainingAccounts`: optionales Array von PublicKey als schreibgeschützte Referenzkonten (z.B. Feed-PDA für Indexierung) |
 |----------------|--------------------------|
 | **Rückgabe** | Transaktionssignatur (string) |
 

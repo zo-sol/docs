@@ -283,7 +283,7 @@ tx_sig = await writer.update_user_metadata(
 
 #### `write_row()`
 
-| **参数** | `connection`：AsyncClient<br/>`signer`：Keypair<br/>`db_root_id`：数据库 ID（bytes 或 str）<br/>`table_seed`：表名（bytes 或 str）<br/>`row_json`：JSON 行数据（str）<br/>`skip_confirmation`：跳过交易确认（默认值：False） |
+| **参数** | `connection`：AsyncClient<br/>`signer`：Keypair<br/>`db_root_id`：数据库 ID（bytes 或 str）<br/>`table_seed`：表名（bytes 或 str）<br/>`row_json`：JSON 行数据（str）<br/>`skip_confirmation`：跳过交易确认（默认值：False）<br/>`remaining_accounts`：作为只读引用账户追加的 Pubkey 列表（可选，例如用于 feed PDA 索引） |
 |----------------|--------------------------|
 | **返回值** | 交易签名（str） |
 

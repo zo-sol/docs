@@ -283,7 +283,7 @@ tx_sig = await writer.update_user_metadata(
 
 #### `write_row()`
 
-| **पैरामीटर** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: डेटाबेस ID (bytes या str)<br/>`table_seed`: टेबल नाम (bytes या str)<br/>`row_json`: JSON पंक्ति डेटा (str)<br/>`skip_confirmation`: tx कन्फ़र्मेशन छोड़ें (डिफ़ॉल्ट: False) |
+| **पैरामीटर** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: डेटाबेस ID (bytes या str)<br/>`table_seed`: टेबल नाम (bytes या str)<br/>`row_json`: JSON पंक्ति डेटा (str)<br/>`skip_confirmation`: tx कन्फ़र्मेशन छोड़ें (डिफ़ॉल्ट: False)<br/>`remaining_accounts`: रीड-ओनली रेफरेंस अकाउंट के रूप में जोड़ने के लिए Pubkey की वैकल्पिक लिस्ट (जैसे फीड PDA इंडेक्सिंग के लिए) |
 |----------------|--------------------------|
 | **रिटर्न** | ट्रांज़ैक्शन सिग्नेचर (str) |
 

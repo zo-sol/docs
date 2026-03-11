@@ -285,7 +285,7 @@ const txSig = await iqlabs.writer.updateUserMetadata(
 
 #### `writeRow()`
 
-| **పారామీటర్లు** | `connection`: Solana RPC కనెక్షన్<br/>`signer`: సైనర్<br/>`dbRootId`: డేటాబేస్ ID (Uint8Array లేదా string)<br/>`tableSeed`: టేబుల్ పేరు (Uint8Array లేదా string)<br/>`rowJson`: JSON రో డేటా (string)<br/>`skipConfirmation`: tx నిర్ధారణను దాటవేయండి (boolean, డీఫాల్ట్: false) |
+| **పారామీటర్లు** | `connection`: Solana RPC కనెక్షన్<br/>`signer`: సైనర్<br/>`dbRootId`: డేటాబేస్ ID (Uint8Array లేదా string)<br/>`tableSeed`: టేబుల్ పేరు (Uint8Array లేదా string)<br/>`rowJson`: JSON రో డేటా (string)<br/>`skipConfirmation`: tx నిర్ధారణను దాటవేయండి (boolean, డీఫాల్ట్: false)<br/>`remainingAccounts`: రీడ్-ఓన్లీ రిఫరెన్స్ ఖాతాలుగా జోడించడానికి PublicKey యొక్క ఐచ్ఛిక అర్రే (ఉదా. ఫీడ్ PDA ఇండెక్సింగ్ కోసం) |
 |----------------|--------------------------|
 | **రిటర్న్** | ట్రాన్సాక్షన్ సిగ్నేచర్ (string) |
 

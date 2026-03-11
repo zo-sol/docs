@@ -283,7 +283,7 @@ tx_sig = await writer.update_user_metadata(
 
 #### `write_row()`
 
-| **పారామీటర్లు** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: డేటాబేస్ ID (bytes లేదా str)<br/>`table_seed`: టేబుల్ పేరు (bytes లేదా str)<br/>`row_json`: JSON వరుస డేటా (str)<br/>`skip_confirmation`: tx నిర్ధారణను దాటవేయండి (డిఫాల్ట్: False) |
+| **పారామీటర్లు** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: డేటాబేస్ ID (bytes లేదా str)<br/>`table_seed`: టేబుల్ పేరు (bytes లేదా str)<br/>`row_json`: JSON వరుస డేటా (str)<br/>`skip_confirmation`: tx నిర్ధారణను దాటవేయండి (డిఫాల్ట్: False)<br/>`remaining_accounts`: రీడ్-ఓన్లీ రిఫరెన్స్ ఖాతాలుగా జోడించడానికి Pubkey యొక్క ఐచ్ఛిక లిస్ట్ (ఉదా. ఫీడ్ PDA ఇండెక్సింగ్ కోసం) |
 |----------------|--------------------------|
 | **రిటర్న్స్** | లావాదేవీ సంతకం (str) |
 

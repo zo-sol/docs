@@ -283,7 +283,7 @@ tx_sig = await writer.update_user_metadata(
 
 #### `write_row()`
 
-| **Parâmetros** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: ID do banco de dados (bytes ou str)<br/>`table_seed`: nome da tabela (bytes ou str)<br/>`row_json`: dados JSON da linha (str)<br/>`skip_confirmation`: pular confirmação da tx (padrão: False) |
+| **Parâmetros** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: ID do banco de dados (bytes ou str)<br/>`table_seed`: nome da tabela (bytes ou str)<br/>`row_json`: dados JSON da linha (str)<br/>`skip_confirmation`: pular confirmação da tx (padrão: False)<br/>`remaining_accounts`: lista opcional de Pubkey para adicionar como contas de referência somente leitura (ex. feed PDA para indexação) |
 |----------------|--------------------------|
 | **Retorno** | Assinatura da transação (str) |
 

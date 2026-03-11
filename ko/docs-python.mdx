@@ -283,7 +283,7 @@ tx_sig = await writer.update_user_metadata(
 
 #### `write_row()`
 
-| **파라미터** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: 데이터베이스 ID (bytes 또는 str)<br/>`table_seed`: 테이블 이름 (bytes 또는 str)<br/>`row_json`: JSON 행 데이터 (str)<br/>`skip_confirmation`: 트랜잭션 확인 생략 (기본값: False) |
+| **파라미터** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: 데이터베이스 ID (bytes 또는 str)<br/>`table_seed`: 테이블 이름 (bytes 또는 str)<br/>`row_json`: JSON 행 데이터 (str)<br/>`skip_confirmation`: 트랜잭션 확인 생략 (기본값: False)<br/>`remaining_accounts`: 읽기 전용 참조 계정으로 추가할 Pubkey 리스트 (선택사항, 예: 피드 PDA 인덱싱용) |
 |----------------|--------------------------|
 | **반환값** | 트랜잭션 서명 (str) |
 

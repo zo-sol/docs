@@ -265,7 +265,7 @@ for conn in connections:
 
 #### `write_row()`
 
-| **Parameters** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: database ID (bytes or str)<br/>`table_seed`: table name (bytes or str)<br/>`row_json`: JSON row data (str)<br/>`skip_confirmation`: skip tx confirmation (default: False) |
+| **Parameters** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: database ID (bytes or str)<br/>`table_seed`: table name (bytes or str)<br/>`row_json`: JSON row data (str)<br/>`skip_confirmation`: skip tx confirmation (default: False)<br/>`remaining_accounts`: optional list of Pubkey to append as read-only reference accounts (e.g. feed PDA for indexing) |
 |----------------|--------------------------|
 | **Returns** | Transaction signature (str) |
 

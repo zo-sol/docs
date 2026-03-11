@@ -285,7 +285,7 @@ const txSig = await iqlabs.writer.updateUserMetadata(
 
 #### `writeRow()`
 
-| **파라미터** | `connection`: Solana RPC 연결<br/>`signer`: 서명 지갑<br/>`dbRootId`: 데이터베이스 ID (Uint8Array 또는 string)<br/>`tableSeed`: 테이블 이름 (Uint8Array 또는 string)<br/>`rowJson`: JSON 행 데이터 (string)<br/>`skipConfirmation`: 트랜잭션 확인 생략 (boolean, 기본값: false) |
+| **파라미터** | `connection`: Solana RPC 연결<br/>`signer`: 서명 지갑<br/>`dbRootId`: 데이터베이스 ID (Uint8Array 또는 string)<br/>`tableSeed`: 테이블 이름 (Uint8Array 또는 string)<br/>`rowJson`: JSON 행 데이터 (string)<br/>`skipConfirmation`: 트랜잭션 확인 생략 (boolean, 기본값: false)<br/>`remainingAccounts`: 읽기 전용 참조 계정으로 추가할 PublicKey 배열 (선택사항, 예: 피드 PDA 인덱싱용) |
 |-------------|--------------------------|
 | **반환값** | 트랜잭션 서명 (string) |
 

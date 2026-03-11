@@ -283,7 +283,7 @@ tx_sig = await writer.update_user_metadata(
 
 #### `write_row()`
 
-| **パラメータ** | `connection`：AsyncClient<br/>`signer`：Keypair<br/>`db_root_id`：データベースID（bytesまたはstr）<br/>`table_seed`：テーブル名（bytesまたはstr）<br/>`row_json`：JSON行データ（str）<br/>`skip_confirmation`：トランザクション確認をスキップ（デフォルト：False） |
+| **パラメータ** | `connection`：AsyncClient<br/>`signer`：Keypair<br/>`db_root_id`：データベースID（bytesまたはstr）<br/>`table_seed`：テーブル名（bytesまたはstr）<br/>`row_json`：JSON行データ（str）<br/>`skip_confirmation`：トランザクション確認をスキップ（デフォルト：False）<br/>`remaining_accounts`：読み取り専用の参照アカウントとして追加するPubkeyのリスト（オプション、例：フィードPDAインデックス用） |
 |----------------|--------------------------|
 | **戻り値** | トランザクション署名（str） |
 
