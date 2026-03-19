@@ -90,7 +90,7 @@ JSONデータをデータベースのようにテーブルに保存します。
 
 #### テーブルはどのように作成されますか？
 
-専用の「テーブル作成」関数はありません。[`write_row()`](#write_row)による最初の書き込み時にテーブルが自動的に作成されます。
+[`create_table()`](#create_table) を使用してテーブルを明示的に作成します。DbRoot PDAの空き容量が不足している場合、SDKは同じトランザクション内で自動的に拡張します。追加の操作は不要です。
 
 <Note>
 テーブルは`db_root_id`と`table_seed`（テーブル名）の組み合わせで一意に識別されます。
@@ -98,10 +98,34 @@ JSONデータをデータベースのようにテーブルに保存します。
 
 #### 関連する主要関数
 
-- [`write_row()`](#write_row)：新しい行を追加（テーブルが存在しない場合は自動作成）
+- [`create_table()`](#create_table): 新しいテーブルを作成（必要に応じてDbRootを自動拡張）
+- [`write_row()`](#write_row)：既存テーブルに新しい行を追加
 - [`read_table_rows()`](#read_table_rows)：テーブルから行を読み取る
 - [`get_tablelist_from_root()`](#get_tablelist_from_root)：データベース内のすべてのテーブルを一覧表示
 - [`fetch_inventory_transactions()`](#fetch_inventory_transactions)：アップロードされたファイルを一覧表示
+
+---
+
+### 暗号化（Crypto）
+
+SDK は 3 つの暗号化モードとウォレット署名からの鍵導出を提供します。
+
+#### 暗号化モード
+
+- **DH（Diffie-Hellman）暗号化**：一時的な X25519 ECDH → HKDF-SHA256 → AES-256-GCM。単一の受信者に対する暗号化です。
+- **パスワード暗号化**：PBKDF2-SHA256（250,000 回反復）→ AES-256-GCM。パスワードベースの暗号化です。
+- **マルチ受信者暗号化**：PGP スタイルのハイブリッド方式。ランダムな CEK（コンテンツ暗号化キー）を生成し、各受信者ごとに ECDH ラッピングを行います。
+
+#### 鍵導出
+
+`derive_x25519_keypair` を使用してウォレット署名から X25519 キーペアを導出します。
+
+#### 関連する主要関数
+
+- [`derive_x25519_keypair()`](#derive_x25519_keypair)：ウォレット署名から X25519 キーペアを導出
+- [`dh_encrypt()`](#dh_encrypt) / [`dh_decrypt()`](#dh_decrypt)：DH 暗号化/復号化
+- [`password_encrypt()`](#password_encrypt) / [`password_decrypt()`](#password_decrypt)：パスワード暗号化/復号化
+- [`multi_encrypt()`](#multi_encrypt) / [`multi_decrypt()`](#multi_decrypt)：マルチ受信者暗号化/復号化
 
 ---
 
@@ -149,7 +173,7 @@ print(result['metadata'])  # ファイルメタデータを含むJSON文字列
 
 #### `request_connection()`
 
-| **パラメータ** | `connection`：AsyncClient<br/>`signer`：Keypair<br/>`db_root_id`：データベースID（bytesまたはstr）<br/>`party_a`：1人目のユーザーの公開鍵（str）<br/>`party_b`：2人目のユーザーの公開鍵（str）<br/>`table_name`：コネクションテーブル名（strまたはbytes）<br/>`columns`：カラムリスト（list[strまたはbytes]）<br/>`id_col`：IDカラム（strまたはbytes）<br/>`ext_keys`：拡張キー（list[strまたはbytes]） |
+| **パラメータ** | `connection`：AsyncClient<br/>`signer`：Keypair または WalletSigner<br/>`db_root_id`：データベースID（bytesまたはstr）<br/>`party_a`：1人目のユーザーの公開鍵（str）<br/>`party_b`：2人目のユーザーの公開鍵（str）<br/>`table_name`：コネクションテーブル名（strまたはbytes）<br/>`columns`：カラムリスト（list[strまたはbytes]）<br/>`id_col`：IDカラム（strまたはbytes）<br/>`ext_keys`：拡張キー（list[strまたはbytes]） |
 |----------------|--------------------------|
 | **戻り値** | トランザクション署名（str） |
 
@@ -215,7 +239,7 @@ print(conn_info['status'])  # 'pending' | 'approved' | 'blocked'
 
 #### `write_connection_row()`
 
-| **パラメータ** | `connection`：AsyncClient<br/>`signer`：Keypair<br/>`db_root_id`：データベースID（bytesまたはstr）<br/>`connection_seed`：コネクションシード（bytesまたはstr）<br/>`row_json`：JSONデータ（str） |
+| **パラメータ** | `connection`：AsyncClient<br/>`signer`：Keypair または WalletSigner<br/>`db_root_id`：データベースID（bytesまたはstr）<br/>`connection_seed`：コネクションシード（bytesまたはstr）<br/>`row_json`：JSONデータ（str） |
 |----------------|--------------------------|
 | **戻り値** | トランザクション署名（str） |
 
@@ -263,7 +287,7 @@ for conn in connections:
 
 #### `update_user_metadata()`
 
-| **パラメータ** | `connection`: AsyncClient<br>`signer`: Keypair<br>`db_root_id`: データベース ID（bytes または str）<br>`meta`: 保存するメタデータ（bytes または str） |
+| **パラメータ** | `connection`: AsyncClient<br>`signer`: Keypair または WalletSigner<br>`db_root_id`: データベース ID（bytes または str）<br>`meta`: 保存するメタデータ（bytes または str） |
 |----------|--------------------------|
 | **戻り値** | トランザクション署名（str） |
 
@@ -281,9 +305,31 @@ tx_sig = await writer.update_user_metadata(
 
 ### テーブル管理
 
+#### `create_table()`
+
+| **パラメータ** | `connection`: AsyncClient<br/>`signer`: Keypair または WalletSigner<br/>`db_root_id`: データベースID (bytes または str)<br/>`table_seed`: テーブルシード (bytes または str)<br/>`table_name`: テーブル名 (bytes または str)<br/>`column_names`: カラムリスト (list[bytes または str])<br/>`id_col`: IDカラム (bytes または str)<br/>`ext_keys`: 拡張キー (list[bytes または str])<br/>`gate_mint`: オプションのトークンゲート (Pubkey)<br/>`writers`: オプションの許可ライター (list[Pubkey]) |
+|----------------|--------------------------|
+| **戻り値** | トランザクション署名 (str) |
+
+DbRoot PDAの空き容量が不足している場合、同じトランザクションにreallocインストラクションが自動的に追加されます。追加の署名や手動の容量管理は不要です。
+
+```python
+from iqlabs import writer
+
+await writer.create_table(
+    connection, signer, 'my-db', 'users',
+    'users',
+    ['name', 'email', 'age'],
+    'name',
+    []
+)
+```
+
+---
+
 #### `write_row()`
 
-| **パラメータ** | `connection`：AsyncClient<br/>`signer`：Keypair<br/>`db_root_id`：データベースID（bytesまたはstr）<br/>`table_seed`：テーブル名（bytesまたはstr）<br/>`row_json`：JSON行データ（str）<br/>`skip_confirmation`：トランザクション確認をスキップ（デフォルト：False）<br/>`remaining_accounts`：読み取り専用の参照アカウントとして追加するPubkeyのリスト（オプション、例：フィードPDAインデックス用） |
+| **パラメータ** | `connection`：AsyncClient<br/>`signer`：Keypair または WalletSigner<br/>`db_root_id`：データベースID（bytesまたはstr）<br/>`table_seed`：テーブル名（bytesまたはstr）<br/>`row_json`：JSON行データ（str）<br/>`skip_confirmation`：トランザクション確認をスキップ（デフォルト：False）<br/>`remaining_accounts`：読み取り専用の参照アカウントとして追加するPubkeyのリスト（オプション、例：フィードPDAインデックス用） |
 |----------------|--------------------------|
 | **戻り値** | トランザクション署名（str） |
 
@@ -366,6 +412,114 @@ for tx in my_files:
 
 ---
 
+### 暗号化（Crypto）
+
+#### `derive_x25519_keypair()`
+
+| **パラメータ** | `sign_message`：メッセージ署名関数（async callable） |
+|----------------|--------------------------|
+| **戻り値** | `priv_key` と `pub_key` を含む辞書 |
+
+```python
+from iqlabs import crypto
+
+# ウォレット署名から X25519 キーペアを導出
+keypair = await crypto.derive_x25519_keypair(sign_message)
+print(keypair['pub_key'])  # 公開鍵（hex）
+```
+
+---
+
+#### `dh_encrypt()`
+
+| **パラメータ** | `recipient_pub_hex`：受信者の公開鍵（hex string）<br/>`plaintext`：暗号化するデータ |
+|----------------|--------------------------|
+| **戻り値** | `sender_pub`、`iv`、`ciphertext` を含む辞書 |
+
+```python
+from iqlabs import crypto
+
+# DH 暗号化で受信者にデータを暗号化
+encrypted = await crypto.dh_encrypt(recipient_pub_hex, plaintext)
+```
+
+---
+
+#### `dh_decrypt()`
+
+| **パラメータ** | `priv_key`：秘密鍵<br/>`sender_pub_hex`：送信者の公開鍵（hex string）<br/>`iv_hex`：初期化ベクトル（hex string）<br/>`ciphertext_hex`：暗号文（hex string） |
+|----------------|--------------------------|
+| **戻り値** | bytes |
+
+```python
+from iqlabs import crypto
+
+# DH 暗号化されたデータを復号化
+decrypted = crypto.dh_decrypt(priv_key, sender_pub_hex, iv_hex, ciphertext_hex)
+```
+
+---
+
+#### `password_encrypt()`
+
+| **パラメータ** | `password`：暗号化パスワード<br/>`plaintext`：暗号化するデータ |
+|----------------|--------------------------|
+| **戻り値** | `salt`、`iv`、`ciphertext` を含む辞書 |
+
+```python
+from iqlabs import crypto
+
+# パスワードでデータを暗号化
+encrypted = crypto.password_encrypt(password, plaintext)
+```
+
+---
+
+#### `password_decrypt()`
+
+| **パラメータ** | `password`：復号化パスワード<br/>`salt_hex`：ソルト（hex string）<br/>`iv_hex`：初期化ベクトル（hex string）<br/>`ciphertext_hex`：暗号文（hex string） |
+|----------------|--------------------------|
+| **戻り値** | bytes |
+
+```python
+from iqlabs import crypto
+
+# パスワードで暗号化されたデータを復号化
+decrypted = crypto.password_decrypt(password, salt_hex, iv_hex, ciphertext_hex)
+```
+
+---
+
+#### `multi_encrypt()`
+
+| **パラメータ** | `recipient_pub_hexes`：受信者の公開鍵リスト（list[str]）<br/>`plaintext`：暗号化するデータ |
+|----------------|--------------------------|
+| **戻り値** | `recipients`、`iv`、`ciphertext` を含む辞書 |
+
+```python
+from iqlabs import crypto
+
+# 複数の受信者にデータを暗号化
+encrypted = crypto.multi_encrypt(recipient_pub_hexes, plaintext)
+```
+
+---
+
+#### `multi_decrypt()`
+
+| **パラメータ** | `priv_key`：秘密鍵<br/>`pub_key_hex`：自分の公開鍵（hex string）<br/>`encrypted`：暗号化辞書 |
+|----------------|--------------------------|
+| **戻り値** | bytes |
+
+```python
+from iqlabs import crypto
+
+# マルチ受信者暗号化データを復号化
+decrypted = crypto.multi_decrypt(priv_key, pub_key_hex, encrypted)
+```
+
+---
+
 ### 環境設定
 
 #### `set_rpc_url()`
@@ -396,7 +550,7 @@ set_rpc_url('https://your-rpc.example.com')
 
 | **モジュール** | `writer` |
 |------------|----------|
-| **パラメータ** | `connection`：AsyncClient<br/>`signer`：Keypair<br/>`db_root_id`：データベースID（bytesまたはstr）<br/>`seed`：テーブルまたはコネクションシード（bytesまたはstr）<br/>`row_json`：JSON行データ（str）<br/>`table_name`：テーブル編集時に必要（オプション）<br/>`target_tx`：テーブル編集用の参照トランザクション（オプション） |
+| **パラメータ** | `connection`：AsyncClient<br/>`signer`：Keypair または WalletSigner<br/>`db_root_id`：データベースID（bytesまたはstr）<br/>`seed`：テーブルまたはコネクションシード（bytesまたはstr）<br/>`row_json`：JSON行データ（str）<br/>`table_name`：テーブル編集時に必要（オプション）<br/>`target_tx`：テーブル編集用の参照トランザクション（オプション） |
 | **戻り値** | トランザクション署名（str） |
 | **ユースケース** | カスタム行管理、既存行の更新 |
 

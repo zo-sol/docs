@@ -90,7 +90,7 @@ Store JSON data in tables like a database.
 
 #### How are tables created?
 
-There is no dedicated "create table" function. The first write via [`writeRow()`](#writerow) creates the table automatically.
+Use [`createTable()`](#createtable) to create a table explicitly. If the DbRoot PDA is running low on space, the SDK automatically expands it in the same transaction — no extra steps needed.
 
 <Note>
 A table is uniquely identified by the combination of `dbRootId` and `tableSeed` (table name).
@@ -98,10 +98,34 @@ A table is uniquely identified by the combination of `dbRootId` and `tableSeed` 
 
 #### Key related functions
 
-- [`writeRow()`](#writerow): add a new row (creates the table if missing)
+- [`createTable()`](#createtable): create a new table (auto-reallocs DbRoot if needed)
+- [`writeRow()`](#writerow): add a new row to an existing table
 - [`readTableRows()`](#readtablerows): read rows from a table
 - [`getTablelistFromRoot()`](#gettablelistfromroot): list all tables in a database
 - [`fetchInventoryTransactions()`](#fetchinventorytransactions): list uploaded files
+
+---
+
+### Encryption (Crypto)
+
+The SDK includes a built-in encryption module (`iqlabs.crypto`) for encrypting data before storing it on-chain.
+
+#### Three encryption modes
+
+- **DH Encryption** (single recipient): Ephemeral X25519 ECDH → HKDF-SHA256 → AES-256-GCM. Use when encrypting data for one specific recipient.
+- **Password Encryption**: PBKDF2-SHA256 (250k iterations) → AES-256-GCM. Use for password-protected data that anyone with the password can decrypt.
+- **Multi-recipient Encryption** (PGP-style hybrid): Generates a random content encryption key (CEK), encrypts data once, then wraps the CEK for each recipient via ECDH. Use when encrypting data for multiple recipients.
+
+#### Key derivation
+
+Users can derive a deterministic X25519 keypair from their wallet signature using [`deriveX25519Keypair()`](#derivex25519keypair). This means users don't need to manage separate encryption keys — their wallet is the key.
+
+#### Key related functions
+
+- [`deriveX25519Keypair()`](#derivex25519keypair): derive encryption keypair from wallet
+- [`dhEncrypt()`](#dhencrypt) / [`dhDecrypt()`](#dhdecrypt): single-recipient encryption
+- [`passwordEncrypt()`](#passwordencrypt) / [`passwordDecrypt()`](#passworddecrypt): password-based encryption
+- [`multiEncrypt()`](#multiencrypt) / [`multiDecrypt()`](#multidecrypt): multi-recipient encryption
 
 ---
 
@@ -283,6 +307,28 @@ const txSig = await iqlabs.writer.updateUserMetadata(
 
 ### Table Management
 
+#### `createTable()`
+
+| **Parameters** | `connection`: Solana RPC Connection<br/>`signer`: Signer<br/>`dbRootId`: database ID (Uint8Array or string)<br/>`tableSeed`: table seed (Uint8Array or string)<br/>`tableName`: table name (Uint8Array or string)<br/>`columnNames`: column list (Array\<Uint8Array \| string\>)<br/>`idCol`: ID column (Uint8Array or string)<br/>`extKeys`: extension keys (Array\<Uint8Array \| string\>)<br/>`gateMint`: optional token gate (PublicKey)<br/>`writers`: optional allowed writers (PublicKey[]) |
+|----------------|--------------------------|
+| **Returns** | Transaction signature (string) |
+
+If the DbRoot PDA is running low on space, a realloc instruction is automatically prepended to the same transaction. No extra signing or manual space management is needed.
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+await iqlabs.writer.createTable(
+  connection, signer, 'my-db', 'users',
+  'users',
+  ['name', 'email', 'age'],
+  'name',
+  []
+);
+```
+
+---
+
 #### `writeRow()`
 
 | **Parameters** | `connection`: Solana RPC Connection<br/>`signer`: Signer<br/>`dbRootId`: database ID (Uint8Array or string)<br/>`tableSeed`: table name (Uint8Array or string)<br/>`rowJson`: JSON row data (string)<br/>`skipConfirmation`: skip tx confirmation (boolean, default: false)<br/>`remainingAccounts`: optional array of PublicKey to append as read-only reference accounts (e.g. feed PDA for indexing) |
@@ -398,6 +444,120 @@ myFiles.forEach(tx => {
     console.log(`Signature: ${tx.signature}`);
   }
 });
+```
+
+---
+
+### Encryption
+
+#### `deriveX25519Keypair()`
+
+Derive a deterministic X25519 keypair from a wallet signature. The same wallet always produces the same keypair.
+
+| **Parameters** | `signMessage`: wallet sign function `(msg: Uint8Array) => Promise<Uint8Array>` |
+|----------------|--------------------------|
+| **Returns** | `{ privKey: Uint8Array, pubKey: Uint8Array }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const { privKey, pubKey } = await iqlabs.crypto.deriveX25519Keypair(
+  wallet.signMessage
+);
+```
+
+---
+
+#### `dhEncrypt()`
+
+| **Parameters** | `recipientPubHex`: recipient's X25519 public key (hex string)<br/>`plaintext`: data to encrypt (Uint8Array) |
+|----------------|--------------------------|
+| **Returns** | `{ senderPub: string, iv: string, ciphertext: string }` (all hex) |
+
+#### `dhDecrypt()`
+
+| **Parameters** | `privKey`: recipient's private key (Uint8Array)<br/>`senderPubHex`: sender's ephemeral public key (hex string)<br/>`ivHex`: IV (hex string)<br/>`ciphertextHex`: ciphertext (hex string) |
+|----------------|--------------------------|
+| **Returns** | `Uint8Array` (decrypted plaintext) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Encrypt for a single recipient
+const encrypted = await iqlabs.crypto.dhEncrypt(
+  recipientPubHex,
+  new TextEncoder().encode('secret message')
+);
+
+// Decrypt (recipient side)
+const decrypted = await iqlabs.crypto.dhDecrypt(
+  recipientPrivKey,
+  encrypted.senderPub,
+  encrypted.iv,
+  encrypted.ciphertext
+);
+console.log(new TextDecoder().decode(decrypted)); // 'secret message'
+```
+
+---
+
+#### `passwordEncrypt()`
+
+| **Parameters** | `password`: password (string)<br/>`plaintext`: data to encrypt (Uint8Array) |
+|----------------|--------------------------|
+| **Returns** | `{ salt: string, iv: string, ciphertext: string }` (all hex) |
+
+#### `passwordDecrypt()`
+
+| **Parameters** | `password`: password (string)<br/>`saltHex`: salt (hex string)<br/>`ivHex`: IV (hex string)<br/>`ciphertextHex`: ciphertext (hex string) |
+|----------------|--------------------------|
+| **Returns** | `Uint8Array` (decrypted plaintext) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Encrypt with password
+const encrypted = await iqlabs.crypto.passwordEncrypt(
+  'my-password',
+  new TextEncoder().encode('secret data')
+);
+
+// Decrypt with same password
+const decrypted = await iqlabs.crypto.passwordDecrypt(
+  'my-password',
+  encrypted.salt,
+  encrypted.iv,
+  encrypted.ciphertext
+);
+```
+
+---
+
+#### `multiEncrypt()`
+
+| **Parameters** | `recipientPubHexes`: recipient public keys (string[])<br/>`plaintext`: data to encrypt (Uint8Array) |
+|----------------|--------------------------|
+| **Returns** | `{ recipients: RecipientEntry[], iv: string, ciphertext: string }` |
+
+#### `multiDecrypt()`
+
+| **Parameters** | `privKey`: your private key (Uint8Array)<br/>`pubKeyHex`: your public key (hex string)<br/>`encrypted`: the MultiEncryptResult object |
+|----------------|--------------------------|
+| **Returns** | `Uint8Array` (decrypted plaintext) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Encrypt for multiple recipients
+const encrypted = await iqlabs.crypto.multiEncrypt(
+  [alicePubHex, bobPubHex, carolPubHex],
+  new TextEncoder().encode('group secret')
+);
+
+// Each recipient decrypts with their own key
+const plaintext = await iqlabs.crypto.multiDecrypt(
+  alicePrivKey, alicePubHex, encrypted
+);
 ```
 
 ---

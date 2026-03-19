@@ -90,7 +90,7 @@ JSON-Daten in Tabellen wie in einer Datenbank speichern.
 
 #### Wie werden Tabellen erstellt?
 
-Es gibt keine spezielle "create table"-Funktion. Der erste Schreibvorgang über [`writeRow()`](#writerow) erstellt die Tabelle automatisch.
+Verwenden Sie [`createTable()`](#createtable), um eine Tabelle explizit zu erstellen. Wenn der DbRoot-PDA wenig Platz hat, erweitert das SDK ihn automatisch in derselben Transaktion — keine zusätzlichen Schritte erforderlich.
 
 <Note>
 Eine Tabelle wird eindeutig durch die Kombination aus `dbRootId` und `tableSeed` (Tabellenname) identifiziert.
@@ -98,10 +98,34 @@ Eine Tabelle wird eindeutig durch die Kombination aus `dbRootId` und `tableSeed`
 
 #### Wichtige zugehörige Funktionen
 
-- [`writeRow()`](#writerow): eine neue Zeile hinzufügen (erstellt die Tabelle, falls sie fehlt)
+- [`createTable()`](#createtable): Neue Tabelle erstellen (erweitert DbRoot bei Bedarf automatisch)
+- [`writeRow()`](#writerow): Neue Zeile zu einer bestehenden Tabelle hinzufügen
 - [`readTableRows()`](#readtablerows): Zeilen aus einer Tabelle lesen
 - [`getTablelistFromRoot()`](#gettablelistfromroot): alle Tabellen in einer Datenbank auflisten
 - [`fetchInventoryTransactions()`](#fetchinventorytransactions): hochgeladene Dateien auflisten
+
+---
+
+### Verschlüsselung (Crypto)
+
+Das SDK bietet 3 Verschlüsselungsmodi und die Ableitung von Schlüsseln aus Wallet-Signaturen.
+
+#### Verschlüsselungsmodi
+
+- **DH (Diffie-Hellman) Verschlüsselung**: Ephemerer X25519 ECDH → HKDF-SHA256 → AES-256-GCM. Verschlüsselung für einen einzelnen Empfänger.
+- **Passwort-Verschlüsselung**: PBKDF2-SHA256 (250.000 Iterationen) → AES-256-GCM. Passwortbasierte Verschlüsselung.
+- **Multi-Empfänger-Verschlüsselung**: PGP-ähnliches Hybridverfahren. Zufälliger CEK (Content Encryption Key) wird generiert und per ECDH pro Empfänger verpackt.
+
+#### Schlüsselableitung
+
+Verwende `deriveX25519Keypair`, um ein X25519-Schlüsselpaar aus einer Wallet-Signatur abzuleiten.
+
+#### Wichtige zugehörige Funktionen
+
+- [`deriveX25519Keypair()`](#derivex25519keypair): X25519-Schlüsselpaar aus Wallet-Signatur ableiten
+- [`dhEncrypt()`](#dhencrypt) / [`dhDecrypt()`](#dhdecrypt): DH-Verschlüsselung/-Entschlüsselung
+- [`passwordEncrypt()`](#passwordencrypt) / [`passwordDecrypt()`](#passworddecrypt): Passwort-Verschlüsselung/-Entschlüsselung
+- [`multiEncrypt()`](#multiencrypt) / [`multiDecrypt()`](#multidecrypt): Multi-Empfänger-Verschlüsselung/-Entschlüsselung
 
 ---
 
@@ -283,6 +307,28 @@ const txSig = await iqlabs.writer.updateUserMetadata(
 
 ### Tabellenverwaltung
 
+#### `createTable()`
+
+| **Parameter** | `connection`: Solana RPC Connection<br/>`signer`: Signer<br/>`dbRootId`: Datenbank-ID (Uint8Array oder string)<br/>`tableSeed`: Tabellen-Seed (Uint8Array oder string)<br/>`tableName`: Tabellenname (Uint8Array oder string)<br/>`columnNames`: Spaltenliste (Array\<Uint8Array \| string\>)<br/>`idCol`: ID-Spalte (Uint8Array oder string)<br/>`extKeys`: Erweiterungsschlüssel (Array\<Uint8Array \| string\>)<br/>`gateMint`: Optionales Token-Gate (PublicKey)<br/>`writers`: Optionale erlaubte Schreiber (PublicKey[]) |
+|----------------|--------------------------|
+| **Rückgabe** | Transaktionssignatur (string) |
+
+Wenn der DbRoot-PDA wenig Platz hat, wird automatisch eine Realloc-Instruktion in derselben Transaktion vorangestellt. Keine zusätzliche Signierung oder manuelle Platzverwaltung erforderlich.
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+await iqlabs.writer.createTable(
+  connection, signer, 'my-db', 'users',
+  'users',
+  ['name', 'email', 'age'],
+  'name',
+  []
+);
+```
+
+---
+
 #### `writeRow()`
 
 | **Parameter** | `connection`: Solana-RPC-Verbindung<br/>`signer`: Signer<br/>`dbRootId`: Datenbank-ID (Uint8Array oder string)<br/>`tableSeed`: Tabellenname (Uint8Array oder string)<br/>`rowJson`: JSON-Zeilen-Daten (string)<br/>`skipConfirmation`: Transaktionsbestätigung überspringen (boolean, Standard: false)<br/>`remainingAccounts`: optionales Array von PublicKey als schreibgeschützte Referenzkonten (z.B. Feed-PDA für Indexierung) |
@@ -398,6 +444,114 @@ myFiles.forEach(tx => {
     console.log(`Signatur: ${tx.signature}`);
   }
 });
+```
+
+---
+
+### Verschlüsselung (Crypto)
+
+#### `deriveX25519Keypair()`
+
+| **Parameter** | `signMessage`: Nachrichtensignaturfunktion |
+|----------------|--------------------------|
+| **Rückgabe** | `{ privKey, pubKey }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// X25519-Schlüsselpaar aus Wallet-Signatur ableiten
+const keypair = await iqlabs.crypto.deriveX25519Keypair(signMessage);
+console.log(keypair.pubKey); // Öffentlicher Schlüssel (hex)
+```
+
+---
+
+#### `dhEncrypt()`
+
+| **Parameter** | `recipientPubHex`: öffentlicher Schlüssel des Empfängers (hex string)<br/>`plaintext`: zu verschlüsselnde Daten |
+|----------------|--------------------------|
+| **Rückgabe** | `{ senderPub, iv, ciphertext }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Daten mit DH-Verschlüsselung für den Empfänger verschlüsseln
+const encrypted = await iqlabs.crypto.dhEncrypt(recipientPubHex, plaintext);
+```
+
+---
+
+#### `dhDecrypt()`
+
+| **Parameter** | `privKey`: privater Schlüssel<br/>`senderPubHex`: öffentlicher Schlüssel des Senders (hex string)<br/>`ivHex`: Initialisierungsvektor (hex string)<br/>`ciphertextHex`: Chiffretext (hex string) |
+|----------------|--------------------------|
+| **Rückgabe** | Uint8Array |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// DH-verschlüsselte Daten entschlüsseln
+const decrypted = iqlabs.crypto.dhDecrypt(privKey, senderPubHex, ivHex, ciphertextHex);
+```
+
+---
+
+#### `passwordEncrypt()`
+
+| **Parameter** | `password`: Verschlüsselungspasswort<br/>`plaintext`: zu verschlüsselnde Daten |
+|----------------|--------------------------|
+| **Rückgabe** | `{ salt, iv, ciphertext }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Daten mit Passwort verschlüsseln
+const encrypted = iqlabs.crypto.passwordEncrypt(password, plaintext);
+```
+
+---
+
+#### `passwordDecrypt()`
+
+| **Parameter** | `password`: Entschlüsselungspasswort<br/>`saltHex`: Salt (hex string)<br/>`ivHex`: Initialisierungsvektor (hex string)<br/>`ciphertextHex`: Chiffretext (hex string) |
+|----------------|--------------------------|
+| **Rückgabe** | Uint8Array |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Mit Passwort verschlüsselte Daten entschlüsseln
+const decrypted = iqlabs.crypto.passwordDecrypt(password, saltHex, ivHex, ciphertextHex);
+```
+
+---
+
+#### `multiEncrypt()`
+
+| **Parameter** | `recipientPubHexes`: Array öffentlicher Empfängerschlüssel (hex string[])<br/>`plaintext`: zu verschlüsselnde Daten |
+|----------------|--------------------------|
+| **Rückgabe** | `{ recipients, iv, ciphertext }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Daten für mehrere Empfänger verschlüsseln
+const encrypted = iqlabs.crypto.multiEncrypt(recipientPubHexes, plaintext);
+```
+
+---
+
+#### `multiDecrypt()`
+
+| **Parameter** | `privKey`: privater Schlüssel<br/>`pubKeyHex`: eigener öffentlicher Schlüssel (hex string)<br/>`encrypted`: Verschlüsselungsobjekt |
+|----------------|--------------------------|
+| **Rückgabe** | Uint8Array |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Multi-Empfänger-verschlüsselte Daten entschlüsseln
+const decrypted = iqlabs.crypto.multiDecrypt(privKey, pubKeyHex, encrypted);
 ```
 
 ---

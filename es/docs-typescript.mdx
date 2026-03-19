@@ -90,7 +90,7 @@ Almacena datos JSON en tablas como una base de datos.
 
 #### ¿Cómo se crean las tablas?
 
-No existe una función dedicada para "crear tabla". La primera escritura con [`writeRow()`](#writerow) crea la tabla automáticamente.
+Use [`createTable()`](#createtable) para crear una tabla explícitamente. Si el PDA DbRoot tiene poco espacio, el SDK lo expande automáticamente en la misma transacción — sin pasos adicionales.
 
 <Note>
 Una tabla se identifica de forma única por la combinación de `dbRootId` y `tableSeed` (nombre de la tabla).
@@ -98,10 +98,34 @@ Una tabla se identifica de forma única por la combinación de `dbRootId` y `tab
 
 #### Funciones clave relacionadas
 
-- [`writeRow()`](#writerow): agregar una nueva fila (crea la tabla si falta)
+- [`createTable()`](#createtable): crear una nueva tabla (expande DbRoot automáticamente si es necesario)
+- [`writeRow()`](#writerow): agregar una nueva fila a una tabla existente
 - [`readTableRows()`](#readtablerows): leer filas de una tabla
 - [`getTablelistFromRoot()`](#gettablelistfromroot): listar todas las tablas de una base de datos
 - [`fetchInventoryTransactions()`](#fetchinventorytransactions): listar archivos subidos
+
+---
+
+### Cifrado (Crypto)
+
+El SDK proporciona funciones criptográficas de extremo a extremo para proteger datos en cadena.
+
+#### Modos de cifrado
+
+- **Cifrado DH (un solo destinatario)**: X25519 ECDH efímero → HKDF-SHA256 → AES-256-GCM
+- **Cifrado con contraseña**: PBKDF2-SHA256 (250 000 iteraciones) → AES-256-GCM
+- **Cifrado multi-destinatario (estilo PGP híbrido)**: CEK aleatoria, se cifra una vez y se envuelve la CEK por ECDH para cada destinatario
+
+#### Derivación de claves
+
+Se deriva un par de claves X25519 a partir de la firma del wallet mediante [`deriveX25519Keypair()`](#derivex25519keypair).
+
+#### Funciones clave relacionadas
+
+- [`deriveX25519Keypair()`](#derivex25519keypair): derivar par de claves de cifrado desde la firma del wallet
+- [`dhEncrypt()`](#dhencrypt) / [`dhDecrypt()`](#dhdecrypt): cifrado/descifrado para un solo destinatario
+- [`passwordEncrypt()`](#passwordencrypt) / [`passwordDecrypt()`](#passworddecrypt): cifrado/descifrado basado en contraseña
+- [`multiEncrypt()`](#multiencrypt) / [`multiDecrypt()`](#multidecrypt): cifrado/descifrado multi-destinatario
 
 ---
 
@@ -283,6 +307,28 @@ const txSig = await iqlabs.writer.updateUserMetadata(
 
 ### Gestión de tablas
 
+#### `createTable()`
+
+| **Parámetros** | `connection`: Solana RPC Connection<br/>`signer`: Signer<br/>`dbRootId`: ID de base de datos (Uint8Array o string)<br/>`tableSeed`: semilla de tabla (Uint8Array o string)<br/>`tableName`: nombre de tabla (Uint8Array o string)<br/>`columnNames`: lista de columnas (Array\<Uint8Array \| string\>)<br/>`idCol`: columna ID (Uint8Array o string)<br/>`extKeys`: claves de extensión (Array\<Uint8Array \| string\>)<br/>`gateMint`: gate de token opcional (PublicKey)<br/>`writers`: escritores permitidos opcionales (PublicKey[]) |
+|----------------|--------------------------|
+| **Retorna** | Firma de transacción (string) |
+
+Si el PDA DbRoot tiene poco espacio, se agrega automáticamente una instrucción realloc en la misma transacción. No se necesita firma adicional ni gestión manual de espacio.
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+await iqlabs.writer.createTable(
+  connection, signer, 'my-db', 'users',
+  'users',
+  ['name', 'email', 'age'],
+  'name',
+  []
+);
+```
+
+---
+
 #### `writeRow()`
 
 | **Parámetros** | `connection`: conexión RPC de Solana<br/>`signer`: firmante<br/>`dbRootId`: ID de base de datos (Uint8Array o string)<br/>`tableSeed`: nombre de la tabla (Uint8Array o string)<br/>`rowJson`: datos JSON de la fila (string)<br/>`skipConfirmation`: omitir confirmación de tx (boolean, predeterminado: false)<br/>`remainingAccounts`: array opcional de PublicKey para agregar como cuentas de referencia de solo lectura (ej. feed PDA para indexación) |
@@ -398,6 +444,95 @@ myFiles.forEach(tx => {
     console.log(`Signature: ${tx.signature}`);
   }
 });
+```
+
+---
+
+### Cifrado (Crypto)
+
+#### `deriveX25519Keypair()`
+
+| **Parámetros** | `signMessage`: función de firma del wallet `(message: Uint8Array) => Promise<Uint8Array>` |
+|----------------|--------------------------|
+| **Devuelve** | `{ privKey: Uint8Array, pubKey: string }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Derivar par de claves de cifrado desde la firma del wallet
+const { privKey, pubKey } = await iqlabs.crypto.deriveX25519Keypair(wallet.signMessage);
+```
+
+---
+
+#### `dhEncrypt()`
+
+| **Parámetros** | `recipientPubHex`: clave pública del destinatario (string hexadecimal)<br/>`plaintext`: datos a cifrar (Uint8Array) |
+|----------------|--------------------------|
+| **Devuelve** | `{ senderPub: string, iv: string, ciphertext: string }` |
+
+#### `dhDecrypt()`
+
+| **Parámetros** | `recipientPrivKey`: clave privada del destinatario (Uint8Array)<br/>`senderPub`: clave pública del remitente (string hexadecimal)<br/>`iv`: vector de inicialización (string)<br/>`ciphertext`: texto cifrado (string) |
+|----------------|--------------------------|
+| **Devuelve** | `Uint8Array` (texto plano) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Cifrar para un solo destinatario
+const encrypted = await iqlabs.crypto.dhEncrypt(recipientPubHex, new TextEncoder().encode('secret message'));
+
+// Descifrar
+const decrypted = await iqlabs.crypto.dhDecrypt(recipientPrivKey, encrypted.senderPub, encrypted.iv, encrypted.ciphertext);
+```
+
+---
+
+#### `passwordEncrypt()`
+
+| **Parámetros** | `password`: contraseña (string)<br/>`plaintext`: datos a cifrar (Uint8Array) |
+|----------------|--------------------------|
+| **Devuelve** | `{ salt: string, iv: string, ciphertext: string }` |
+
+#### `passwordDecrypt()`
+
+| **Parámetros** | `password`: contraseña (string)<br/>`salt`: sal (string)<br/>`iv`: vector de inicialización (string)<br/>`ciphertext`: texto cifrado (string) |
+|----------------|--------------------------|
+| **Devuelve** | `Uint8Array` (texto plano) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Cifrar con contraseña
+const encrypted = await iqlabs.crypto.passwordEncrypt('my-password', new TextEncoder().encode('secret data'));
+
+// Descifrar con contraseña
+const decrypted = await iqlabs.crypto.passwordDecrypt('my-password', encrypted.salt, encrypted.iv, encrypted.ciphertext);
+```
+
+---
+
+#### `multiEncrypt()`
+
+| **Parámetros** | `recipientPubHexArray`: array de claves públicas de destinatarios (string[])<br/>`plaintext`: datos a cifrar (Uint8Array) |
+|----------------|--------------------------|
+| **Devuelve** | Objeto cifrado multi-destinatario |
+
+#### `multiDecrypt()`
+
+| **Parámetros** | `recipientPrivKey`: clave privada del destinatario (Uint8Array)<br/>`recipientPubHex`: clave pública del destinatario (string hexadecimal)<br/>`encrypted`: objeto cifrado multi-destinatario |
+|----------------|--------------------------|
+| **Devuelve** | `Uint8Array` (texto plano) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Cifrar para múltiples destinatarios
+const encrypted = await iqlabs.crypto.multiEncrypt([alicePubHex, bobPubHex, carolPubHex], new TextEncoder().encode('group secret'));
+
+// Descifrar como uno de los destinatarios
+const plaintext = await iqlabs.crypto.multiDecrypt(alicePrivKey, alicePubHex, encrypted);
 ```
 
 ---

@@ -90,7 +90,7 @@ IQLabs SDK를 사용하기 전에 알아야 할 주요 개념들입니다.
 
 #### 테이블은 어떻게 생성되나요?
 
-전용 "테이블 생성" 함수가 없습니다. [`writeRow()`](#writerow)를 통한 첫 번째 쓰기가 자동으로 테이블을 생성합니다.
+[`createTable()`](#createtable)을 사용하여 테이블을 명시적으로 생성합니다. DbRoot PDA의 공간이 부족하면, SDK가 같은 트랜잭션 내에서 자동으로 확장합니다 — 추가 작업이 필요 없습니다.
 
 <Note>
 테이블은 `dbRootId`와 `tableSeed` (테이블 이름)의 조합으로 고유하게 식별됩니다.
@@ -98,10 +98,34 @@ IQLabs SDK를 사용하기 전에 알아야 할 주요 개념들입니다.
 
 #### 관련 주요 함수
 
-- [`writeRow()`](#writerow): 새 행 추가 (테이블이 없으면 생성)
+- [`createTable()`](#createtable): 새 테이블 생성 (필요시 DbRoot 자동 확장)
+- [`writeRow()`](#writerow): 기존 테이블에 새 행 추가
 - [`readTableRows()`](#readtablerows): 테이블에서 행 읽기
 - [`getTablelistFromRoot()`](#gettablelistfromroot): 데이터베이스의 모든 테이블 목록 조회
 - [`fetchInventoryTransactions()`](#fetchinventorytransactions): 업로드한 파일 목록 조회
+
+---
+
+### 암호화 (Crypto)
+
+SDK에는 온체인 저장 전 데이터를 암호화하기 위한 내장 암호화 모듈 (`iqlabs.crypto`)이 포함되어 있습니다.
+
+#### 세 가지 암호화 모드
+
+- **DH 암호화** (단일 수신자): 임시 X25519 ECDH → HKDF-SHA256 → AES-256-GCM. 특정 한 명의 수신자에게 데이터를 암호화할 때 사용합니다.
+- **비밀번호 암호화**: PBKDF2-SHA256 (25만 회 반복) → AES-256-GCM. 비밀번호를 아는 누구나 복호화할 수 있는 비밀번호 보호 데이터에 사용합니다.
+- **다중 수신자 암호화** (PGP 방식 하이브리드): 무작위 콘텐츠 암호화 키(CEK)를 생성하고, 데이터를 한 번 암호화한 다음, ECDH를 통해 각 수신자를 위해 CEK를 래핑합니다. 여러 수신자에게 데이터를 암호화할 때 사용합니다.
+
+#### 키 도출
+
+[`deriveX25519Keypair()`](#derivex25519keypair)를 사용하여 지갑 서명으로부터 결정적 X25519 키쌍을 도출할 수 있습니다. 사용자가 별도의 암호화 키를 관리할 필요 없이 — 지갑이 곧 키입니다.
+
+#### 관련 주요 함수
+
+- [`deriveX25519Keypair()`](#derivex25519keypair): 지갑에서 암호화 키쌍 도출
+- [`dhEncrypt()`](#dhencrypt) / [`dhDecrypt()`](#dhdecrypt): 단일 수신자 암호화
+- [`passwordEncrypt()`](#passwordencrypt) / [`passwordDecrypt()`](#passworddecrypt): 비밀번호 기반 암호화
+- [`multiEncrypt()`](#multiencrypt) / [`multiDecrypt()`](#multidecrypt): 다중 수신자 암호화
 
 ---
 
@@ -283,6 +307,28 @@ const txSig = await iqlabs.writer.updateUserMetadata(
 
 ### 테이블 관리
 
+#### `createTable()`
+
+| **매개변수** | `connection`: Solana RPC Connection<br/>`signer`: Signer<br/>`dbRootId`: 데이터베이스 ID (Uint8Array 또는 string)<br/>`tableSeed`: 테이블 시드 (Uint8Array 또는 string)<br/>`tableName`: 테이블 이름 (Uint8Array 또는 string)<br/>`columnNames`: 컬럼 목록 (Array\<Uint8Array \| string\>)<br/>`idCol`: ID 컬럼 (Uint8Array 또는 string)<br/>`extKeys`: 확장 키 (Array\<Uint8Array \| string\>)<br/>`gateMint`: 선택적 토큰 게이트 (PublicKey)<br/>`writers`: 선택적 허용 작성자 (PublicKey[]) |
+|----------------|--------------------------|
+| **반환값** | 트랜잭션 서명 (string) |
+
+DbRoot PDA의 공간이 부족하면 같은 트랜잭션에 realloc 인스트럭션이 자동으로 추가됩니다. 추가 서명이나 수동 공간 관리가 필요 없습니다.
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+await iqlabs.writer.createTable(
+  connection, signer, 'my-db', 'users',
+  'users',
+  ['name', 'email', 'age'],
+  'name',
+  []
+);
+```
+
+---
+
 #### `writeRow()`
 
 | **파라미터** | `connection`: Solana RPC 연결<br/>`signer`: 서명 지갑<br/>`dbRootId`: 데이터베이스 ID (Uint8Array 또는 string)<br/>`tableSeed`: 테이블 이름 (Uint8Array 또는 string)<br/>`rowJson`: JSON 행 데이터 (string)<br/>`skipConfirmation`: 트랜잭션 확인 생략 (boolean, 기본값: false)<br/>`remainingAccounts`: 읽기 전용 참조 계정으로 추가할 PublicKey 배열 (선택사항, 예: 피드 PDA 인덱싱용) |
@@ -398,6 +444,120 @@ myFiles.forEach(tx => {
     console.log(`서명: ${tx.signature}`);
   }
 });
+```
+
+---
+
+### 암호화
+
+#### `deriveX25519Keypair()`
+
+지갑 서명으로부터 결정적 X25519 키쌍을 도출합니다. 같은 지갑은 항상 같은 키쌍을 생성합니다.
+
+| **파라미터** | `signMessage`: 지갑 서명 함수 `(msg: Uint8Array) => Promise<Uint8Array>` |
+|-------------|--------------------------|
+| **반환값** | `{ privKey: Uint8Array, pubKey: Uint8Array }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+const { privKey, pubKey } = await iqlabs.crypto.deriveX25519Keypair(
+  wallet.signMessage
+);
+```
+
+---
+
+#### `dhEncrypt()`
+
+| **파라미터** | `recipientPubHex`: 수신자의 X25519 공개키 (hex 문자열)<br/>`plaintext`: 암호화할 데이터 (Uint8Array) |
+|-------------|--------------------------|
+| **반환값** | `{ senderPub: string, iv: string, ciphertext: string }` (모두 hex) |
+
+#### `dhDecrypt()`
+
+| **파라미터** | `privKey`: 수신자의 개인키 (Uint8Array)<br/>`senderPubHex`: 발신자의 임시 공개키 (hex 문자열)<br/>`ivHex`: IV (hex 문자열)<br/>`ciphertextHex`: 암호문 (hex 문자열) |
+|-------------|--------------------------|
+| **반환값** | `Uint8Array` (복호화된 평문) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// 단일 수신자에게 암호화
+const encrypted = await iqlabs.crypto.dhEncrypt(
+  recipientPubHex,
+  new TextEncoder().encode('비밀 메시지')
+);
+
+// 복호화 (수신자 측)
+const decrypted = await iqlabs.crypto.dhDecrypt(
+  recipientPrivKey,
+  encrypted.senderPub,
+  encrypted.iv,
+  encrypted.ciphertext
+);
+console.log(new TextDecoder().decode(decrypted)); // '비밀 메시지'
+```
+
+---
+
+#### `passwordEncrypt()`
+
+| **파라미터** | `password`: 비밀번호 (string)<br/>`plaintext`: 암호화할 데이터 (Uint8Array) |
+|-------------|--------------------------|
+| **반환값** | `{ salt: string, iv: string, ciphertext: string }` (모두 hex) |
+
+#### `passwordDecrypt()`
+
+| **파라미터** | `password`: 비밀번호 (string)<br/>`saltHex`: salt (hex 문자열)<br/>`ivHex`: IV (hex 문자열)<br/>`ciphertextHex`: 암호문 (hex 문자열) |
+|-------------|--------------------------|
+| **반환값** | `Uint8Array` (복호화된 평문) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// 비밀번호로 암호화
+const encrypted = await iqlabs.crypto.passwordEncrypt(
+  'my-password',
+  new TextEncoder().encode('비밀 데이터')
+);
+
+// 같은 비밀번호로 복호화
+const decrypted = await iqlabs.crypto.passwordDecrypt(
+  'my-password',
+  encrypted.salt,
+  encrypted.iv,
+  encrypted.ciphertext
+);
+```
+
+---
+
+#### `multiEncrypt()`
+
+| **파라미터** | `recipientPubHexes`: 수신자 공개키 배열 (string[])<br/>`plaintext`: 암호화할 데이터 (Uint8Array) |
+|-------------|--------------------------|
+| **반환값** | `{ recipients: RecipientEntry[], iv: string, ciphertext: string }` |
+
+#### `multiDecrypt()`
+
+| **파라미터** | `privKey`: 본인의 개인키 (Uint8Array)<br/>`pubKeyHex`: 본인의 공개키 (hex 문자열)<br/>`encrypted`: MultiEncryptResult 객체 |
+|-------------|--------------------------|
+| **반환값** | `Uint8Array` (복호화된 평문) |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// 여러 수신자에게 암호화
+const encrypted = await iqlabs.crypto.multiEncrypt(
+  [alicePubHex, bobPubHex, carolPubHex],
+  new TextEncoder().encode('그룹 비밀')
+);
+
+// 각 수신자는 자신의 키로 복호화
+const plaintext = await iqlabs.crypto.multiDecrypt(
+  alicePrivKey, alicePubHex, encrypted
+);
 ```
 
 ---

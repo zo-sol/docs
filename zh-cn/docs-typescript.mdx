@@ -90,7 +90,7 @@ SDK 会根据数据大小选择最优方式：
 
 #### 表如何创建？
 
-没有专门的"创建表"函数。第一次通过 [`writeRow()`](#writerow) 写入会自动创建表。
+使用 [`createTable()`](#createtable) 显式创建表。如果 DbRoot PDA 空间不足，SDK 会在同一交易中自动扩展，无需额外操作。
 
 <Note>
 表由 `dbRootId` 与 `tableSeed`（表名）的组合唯一标识。
@@ -98,10 +98,34 @@ SDK 会根据数据大小选择最优方式：
 
 #### 关键相关函数
 
-- [`writeRow()`](#writerow)：添加新行（若不存在则创建表）
+- [`createTable()`](#createtable)：创建新表（如需自动扩展 DbRoot）
+- [`writeRow()`](#writerow)：向现有表添加新行
 - [`readTableRows()`](#readtablerows)：读取表中的行
 - [`getTablelistFromRoot()`](#gettablelistfromroot)：列出数据库中的所有表
 - [`fetchInventoryTransactions()`](#fetchinventorytransactions)：列出已上传文件
+
+---
+
+### 加密（Crypto）
+
+SDK 提供 3 种加密模式以及从钱包签名派生密钥的功能。
+
+#### 加密模式
+
+- **DH（Diffie-Hellman）加密**：临时 X25519 ECDH → HKDF-SHA256 → AES-256-GCM。用于单个接收者的加密。
+- **密码加密**：PBKDF2-SHA256（250,000 次迭代）→ AES-256-GCM。基于密码的加密。
+- **多接收者加密**：PGP 风格的混合方案。生成随机 CEK（内容加密密钥），对每个接收者进行 ECDH 包装。
+
+#### 密钥派生
+
+使用 `deriveX25519Keypair` 从钱包签名派生 X25519 密钥对。
+
+#### 关键相关函数
+
+- [`deriveX25519Keypair()`](#derivex25519keypair)：从钱包签名派生 X25519 密钥对
+- [`dhEncrypt()`](#dhencrypt) / [`dhDecrypt()`](#dhdecrypt)：DH 加密/解密
+- [`passwordEncrypt()`](#passwordencrypt) / [`passwordDecrypt()`](#passworddecrypt)：密码加密/解密
+- [`multiEncrypt()`](#multiencrypt) / [`multiDecrypt()`](#multidecrypt)：多接收者加密/解密
 
 ---
 
@@ -283,6 +307,28 @@ const txSig = await iqlabs.writer.updateUserMetadata(
 
 ### 表管理
 
+#### `createTable()`
+
+| **参数** | `connection`: Solana RPC Connection<br/>`signer`: Signer<br/>`dbRootId`: 数据库 ID (Uint8Array 或 string)<br/>`tableSeed`: 表种子 (Uint8Array 或 string)<br/>`tableName`: 表名 (Uint8Array 或 string)<br/>`columnNames`: 列名列表 (Array\<Uint8Array \| string\>)<br/>`idCol`: ID 列 (Uint8Array 或 string)<br/>`extKeys`: 扩展键 (Array\<Uint8Array \| string\>)<br/>`gateMint`: 可选的代币门控 (PublicKey)<br/>`writers`: 可选的授权写入者 (PublicKey[]) |
+|----------------|--------------------------|
+| **返回值** | 交易签名 (string) |
+
+如果 DbRoot PDA 空间不足，realloc 指令会自动添加到同一交易中。无需额外签名或手动空间管理。
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+await iqlabs.writer.createTable(
+  connection, signer, 'my-db', 'users',
+  'users',
+  ['name', 'email', 'age'],
+  'name',
+  []
+);
+```
+
+---
+
 #### `writeRow()`
 
 | **参数** | `connection`：Solana RPC 连接<br/>`signer`：签名者<br/>`dbRootId`：数据库 ID（Uint8Array 或 string）<br/>`tableSeed`：表名（Uint8Array 或 string）<br/>`rowJson`：JSON 行数据（string）<br/>`skipConfirmation`：跳过交易确认（boolean，默认：false）<br/>`remainingAccounts`：作为只读引用账户追加的 PublicKey 数组（可选，例如用于 feed PDA 索引） |
@@ -398,6 +444,114 @@ myFiles.forEach(tx => {
     console.log(`Signature: ${tx.signature}`);
   }
 });
+```
+
+---
+
+### 加密（Crypto）
+
+#### `deriveX25519Keypair()`
+
+| **参数** | `signMessage`：消息签名函数 |
+|----------------|--------------------------|
+| **返回** | `{ privKey, pubKey }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// 从钱包签名派生 X25519 密钥对
+const keypair = await iqlabs.crypto.deriveX25519Keypair(signMessage);
+console.log(keypair.pubKey); // 公钥（hex）
+```
+
+---
+
+#### `dhEncrypt()`
+
+| **参数** | `recipientPubHex`：接收者公钥（hex string）<br/>`plaintext`：要加密的数据 |
+|----------------|--------------------------|
+| **返回** | `{ senderPub, iv, ciphertext }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// 使用 DH 加密向接收者加密数据
+const encrypted = await iqlabs.crypto.dhEncrypt(recipientPubHex, plaintext);
+```
+
+---
+
+#### `dhDecrypt()`
+
+| **参数** | `privKey`：私钥<br/>`senderPubHex`：发送者公钥（hex string）<br/>`ivHex`：初始化向量（hex string）<br/>`ciphertextHex`：密文（hex string） |
+|----------------|--------------------------|
+| **返回** | Uint8Array |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// 解密 DH 加密的数据
+const decrypted = iqlabs.crypto.dhDecrypt(privKey, senderPubHex, ivHex, ciphertextHex);
+```
+
+---
+
+#### `passwordEncrypt()`
+
+| **参数** | `password`：加密密码<br/>`plaintext`：要加密的数据 |
+|----------------|--------------------------|
+| **返回** | `{ salt, iv, ciphertext }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// 使用密码加密数据
+const encrypted = iqlabs.crypto.passwordEncrypt(password, plaintext);
+```
+
+---
+
+#### `passwordDecrypt()`
+
+| **参数** | `password`：解密密码<br/>`saltHex`：盐值（hex string）<br/>`ivHex`：初始化向量（hex string）<br/>`ciphertextHex`：密文（hex string） |
+|----------------|--------------------------|
+| **返回** | Uint8Array |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// 使用密码解密数据
+const decrypted = iqlabs.crypto.passwordDecrypt(password, saltHex, ivHex, ciphertextHex);
+```
+
+---
+
+#### `multiEncrypt()`
+
+| **参数** | `recipientPubHexes`：接收者公钥数组（hex string[]）<br/>`plaintext`：要加密的数据 |
+|----------------|--------------------------|
+| **返回** | `{ recipients, iv, ciphertext }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// 为多个接收者加密数据
+const encrypted = iqlabs.crypto.multiEncrypt(recipientPubHexes, plaintext);
+```
+
+---
+
+#### `multiDecrypt()`
+
+| **参数** | `privKey`：私钥<br/>`pubKeyHex`：自己的公钥（hex string）<br/>`encrypted`：加密对象 |
+|----------------|--------------------------|
+| **返回** | Uint8Array |
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// 解密多接收者加密数据
+const decrypted = iqlabs.crypto.multiDecrypt(privKey, pubKeyHex, encrypted);
 ```
 
 ---

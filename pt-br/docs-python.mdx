@@ -90,7 +90,7 @@ Armazene dados JSON em tabelas como um banco de dados.
 
 #### Como as tabelas são criadas?
 
-Não existe uma função dedicada para "criar tabela". A primeira escrita via [`write_row()`](#write_row) cria a tabela automaticamente.
+Use [`create_table()`](#create_table) para criar uma tabela explicitamente. Se o PDA DbRoot estiver com pouco espaço, o SDK o expande automaticamente na mesma transação — sem etapas adicionais.
 
 <Note>
 Uma tabela é identificada de forma única pela combinação de `db_root_id` e `table_seed` (nome da tabela).
@@ -98,10 +98,34 @@ Uma tabela é identificada de forma única pela combinação de `db_root_id` e `
 
 #### Funções relacionadas principais
 
-- [`write_row()`](#write_row): adicionar uma nova linha (cria a tabela se não existir)
+- [`create_table()`](#create_table): criar uma nova tabela (expande DbRoot automaticamente se necessário)
+- [`write_row()`](#write_row): adicionar uma nova linha a uma tabela existente
 - [`read_table_rows()`](#read_table_rows): ler linhas de uma tabela
 - [`get_tablelist_from_root()`](#get_tablelist_from_root): listar todas as tabelas em um banco de dados
 - [`fetch_inventory_transactions()`](#fetch_inventory_transactions): listar arquivos enviados
+
+---
+
+### Criptografia (Crypto)
+
+O SDK fornece funcoes criptograficas de ponta a ponta para proteger dados on-chain.
+
+#### Modos de criptografia
+
+- **Criptografia DH (destinatario unico)**: X25519 ECDH efemero → HKDF-SHA256 → AES-256-GCM
+- **Criptografia por senha**: PBKDF2-SHA256 (250.000 iteracoes) → AES-256-GCM
+- **Criptografia multi-destinatarios (hibrido estilo PGP)**: CEK aleatoria, criptografa uma vez, envelopa a CEK por ECDH para cada destinatario
+
+#### Derivacao de chaves
+
+Um par de chaves X25519 e derivado a partir da assinatura da carteira via [`derive_x25519_keypair()`](#derive_x25519_keypair).
+
+#### Funcoes relacionadas principais
+
+- [`derive_x25519_keypair()`](#derive_x25519_keypair): derivar par de chaves de criptografia a partir da assinatura da carteira
+- [`dh_encrypt()`](#dh_encrypt) / [`dh_decrypt()`](#dh_decrypt): criptografia/descriptografia para destinatario unico
+- [`password_encrypt()`](#password_encrypt) / [`password_decrypt()`](#password_decrypt): criptografia/descriptografia baseada em senha
+- [`multi_encrypt()`](#multi_encrypt) / [`multi_decrypt()`](#multi_decrypt): criptografia/descriptografia multi-destinatarios
 
 ---
 
@@ -149,7 +173,7 @@ print(result['metadata'])  # JSON string with file metadata
 
 #### `request_connection()`
 
-| **Parâmetros** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: ID do banco de dados (bytes ou str)<br/>`party_a`: chave pública do primeiro usuário (str)<br/>`party_b`: chave pública do segundo usuário (str)<br/>`table_name`: nome da tabela de conexão (str ou bytes)<br/>`columns`: lista de colunas (list[str ou bytes])<br/>`id_col`: coluna de ID (str ou bytes)<br/>`ext_keys`: chaves de extensão (list[str ou bytes]) |
+| **Parâmetros** | `connection`: AsyncClient<br/>`signer`: Keypair ou WalletSigner<br/>`db_root_id`: ID do banco de dados (bytes ou str)<br/>`party_a`: chave pública do primeiro usuário (str)<br/>`party_b`: chave pública do segundo usuário (str)<br/>`table_name`: nome da tabela de conexão (str ou bytes)<br/>`columns`: lista de colunas (list[str ou bytes])<br/>`id_col`: coluna de ID (str ou bytes)<br/>`ext_keys`: chaves de extensão (list[str ou bytes]) |
 |----------------|--------------------------|
 | **Retorno** | Assinatura da transação (str) |
 
@@ -215,7 +239,7 @@ print(conn_info['status'])  # 'pending' | 'approved' | 'blocked'
 
 #### `write_connection_row()`
 
-| **Parâmetros** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: ID do banco de dados (bytes ou str)<br/>`connection_seed`: seed de conexão (bytes ou str)<br/>`row_json`: dados JSON (str) |
+| **Parâmetros** | `connection`: AsyncClient<br/>`signer`: Keypair ou WalletSigner<br/>`db_root_id`: ID do banco de dados (bytes ou str)<br/>`connection_seed`: seed de conexão (bytes ou str)<br/>`row_json`: dados JSON (str) |
 |----------------|--------------------------|
 | **Retorno** | Assinatura da transação (str) |
 
@@ -281,9 +305,31 @@ tx_sig = await writer.update_user_metadata(
 
 ### Gerenciamento de Tabelas
 
+#### `create_table()`
+
+| **Parâmetros** | `connection`: AsyncClient<br/>`signer`: Keypair ou WalletSigner<br/>`db_root_id`: ID do banco de dados (bytes ou str)<br/>`table_seed`: seed da tabela (bytes ou str)<br/>`table_name`: nome da tabela (bytes ou str)<br/>`column_names`: lista de colunas (list[bytes ou str])<br/>`id_col`: coluna ID (bytes ou str)<br/>`ext_keys`: chaves de extensão (list[bytes ou str])<br/>`gate_mint`: gate de token opcional (Pubkey)<br/>`writers`: escritores permitidos opcionais (list[Pubkey]) |
+|----------------|--------------------------|
+| **Retorno** | Assinatura de transação (str) |
+
+Se o PDA DbRoot estiver com pouco espaço, uma instrução realloc é automaticamente adicionada à mesma transação. Nenhuma assinatura adicional ou gerenciamento manual de espaço é necessário.
+
+```python
+from iqlabs import writer
+
+await writer.create_table(
+    connection, signer, 'my-db', 'users',
+    'users',
+    ['name', 'email', 'age'],
+    'name',
+    []
+)
+```
+
+---
+
 #### `write_row()`
 
-| **Parâmetros** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: ID do banco de dados (bytes ou str)<br/>`table_seed`: nome da tabela (bytes ou str)<br/>`row_json`: dados JSON da linha (str)<br/>`skip_confirmation`: pular confirmação da tx (padrão: False)<br/>`remaining_accounts`: lista opcional de Pubkey para adicionar como contas de referência somente leitura (ex. feed PDA para indexação) |
+| **Parâmetros** | `connection`: AsyncClient<br/>`signer`: Keypair ou WalletSigner<br/>`db_root_id`: ID do banco de dados (bytes ou str)<br/>`table_seed`: nome da tabela (bytes ou str)<br/>`row_json`: dados JSON da linha (str)<br/>`skip_confirmation`: pular confirmação da tx (padrão: False)<br/>`remaining_accounts`: lista opcional de Pubkey para adicionar como contas de referência somente leitura (ex. feed PDA para indexação) |
 |----------------|--------------------------|
 | **Retorno** | Assinatura da transação (str) |
 
@@ -366,6 +412,95 @@ for tx in my_files:
 
 ---
 
+### Criptografia (Crypto)
+
+#### `derive_x25519_keypair()`
+
+| **Parâmetros** | `sign_message`: função de assinatura da carteira (callable) |
+|----------------|--------------------------|
+| **Retorno** | dict com `priv_key` (bytes) e `pub_key` (str) |
+
+```python
+from iqlabs import crypto
+
+# Derivar par de chaves de criptografia a partir da assinatura da carteira
+keypair = await crypto.derive_x25519_keypair(wallet.sign_message)
+```
+
+---
+
+#### `dh_encrypt()`
+
+| **Parâmetros** | `recipient_pub_hex`: chave pública do destinatário (str hexadecimal)<br/>`plaintext`: dados para criptografar (bytes) |
+|----------------|--------------------------|
+| **Retorno** | dict com `sender_pub`, `iv`, `ciphertext` |
+
+#### `dh_decrypt()`
+
+| **Parâmetros** | `recipient_priv_key`: chave privada do destinatário (bytes)<br/>`sender_pub`: chave pública do remetente (str hexadecimal)<br/>`iv`: vetor de inicialização (str)<br/>`ciphertext`: texto cifrado (str) |
+|----------------|--------------------------|
+| **Retorno** | bytes (texto simples) |
+
+```python
+from iqlabs import crypto
+
+# Criptografar para um único destinatário
+encrypted = crypto.dh_encrypt(recipient_pub_hex, b'secret message')
+
+# Descriptografar
+decrypted = crypto.dh_decrypt(recipient_priv_key, encrypted['sender_pub'], encrypted['iv'], encrypted['ciphertext'])
+```
+
+---
+
+#### `password_encrypt()`
+
+| **Parâmetros** | `password`: senha (str)<br/>`plaintext`: dados para criptografar (bytes) |
+|----------------|--------------------------|
+| **Retorno** | dict com `salt`, `iv`, `ciphertext` |
+
+#### `password_decrypt()`
+
+| **Parâmetros** | `password`: senha (str)<br/>`salt`: sal (str)<br/>`iv`: vetor de inicialização (str)<br/>`ciphertext`: texto cifrado (str) |
+|----------------|--------------------------|
+| **Retorno** | bytes (texto simples) |
+
+```python
+from iqlabs import crypto
+
+# Criptografar com senha
+encrypted = crypto.password_encrypt('my-password', b'secret data')
+
+# Descriptografar com senha
+decrypted = crypto.password_decrypt('my-password', encrypted['salt'], encrypted['iv'], encrypted['ciphertext'])
+```
+
+---
+
+#### `multi_encrypt()`
+
+| **Parâmetros** | `recipient_pub_hex_array`: lista de chaves públicas dos destinatários (list[str])<br/>`plaintext`: dados para criptografar (bytes) |
+|----------------|--------------------------|
+| **Retorno** | Objeto criptografado multi-destinatários |
+
+#### `multi_decrypt()`
+
+| **Parâmetros** | `recipient_priv_key`: chave privada do destinatário (bytes)<br/>`recipient_pub_hex`: chave pública do destinatário (str hexadecimal)<br/>`encrypted`: objeto criptografado multi-destinatários |
+|----------------|--------------------------|
+| **Retorno** | bytes (texto simples) |
+
+```python
+from iqlabs import crypto
+
+# Criptografar para múltiplos destinatários
+encrypted = crypto.multi_encrypt([alice_pub_hex, bob_pub_hex, carol_pub_hex], b'group secret')
+
+# Descriptografar como um dos destinatários
+plaintext = crypto.multi_decrypt(alice_priv_key, alice_pub_hex, encrypted)
+```
+
+---
+
 ### Configurações de Ambiente
 
 #### `set_rpc_url()`
@@ -396,7 +531,7 @@ Função unificada que lida tanto com escritas de linhas em tabelas quanto com e
 
 | **Módulo** | `writer` |
 |------------|----------|
-| **Parâmetros** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: ID do banco de dados (bytes ou str)<br/>`seed`: seed da tabela ou conexão (bytes ou str)<br/>`row_json`: dados JSON da linha (str)<br/>`table_name`: obrigatório para edições de tabela (opcional)<br/>`target_tx`: tx de referência para edições de tabela (opcional) |
+| **Parâmetros** | `connection`: AsyncClient<br/>`signer`: Keypair ou WalletSigner<br/>`db_root_id`: ID do banco de dados (bytes ou str)<br/>`seed`: seed da tabela ou conexão (bytes ou str)<br/>`row_json`: dados JSON da linha (str)<br/>`table_name`: obrigatório para edições de tabela (opcional)<br/>`target_tx`: tx de referência para edições de tabela (opcional) |
 | **Retorno** | Assinatura da transação (str) |
 | **Caso de Uso** | Gerenciamento personalizado de linhas, atualização de linhas existentes |
 

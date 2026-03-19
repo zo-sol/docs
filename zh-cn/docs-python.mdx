@@ -90,7 +90,7 @@ pip install iqlabs-solana-sdk
 
 #### 表是如何创建的？
 
-没有专门的"创建表"函数。通过 [`write_row()`](#write_row) 首次写入时会自动创建表。
+使用 [`create_table()`](#create_table) 显式创建表。如果 DbRoot PDA 空间不足，SDK 会在同一交易中自动扩展，无需额外操作。
 
 <Note>
 表由 `db_root_id` 和 `table_seed`（表名）的组合唯一标识。
@@ -98,10 +98,34 @@ pip install iqlabs-solana-sdk
 
 #### 关键相关函数
 
-- [`write_row()`](#write_row)：添加新行（如果表不存在则自动创建）
+- [`create_table()`](#create_table)：创建新表（如需自动扩展 DbRoot）
+- [`write_row()`](#write_row)：向现有表添加新行
 - [`read_table_rows()`](#read_table_rows)：从表中读取行
 - [`get_tablelist_from_root()`](#get_tablelist_from_root)：列出数据库中的所有表
 - [`fetch_inventory_transactions()`](#fetch_inventory_transactions)：列出已上传的文件
+
+---
+
+### 加密（Crypto）
+
+SDK 提供 3 种加密模式以及从钱包签名派生密钥的功能。
+
+#### 加密模式
+
+- **DH（Diffie-Hellman）加密**：临时 X25519 ECDH → HKDF-SHA256 → AES-256-GCM。用于单个接收者的加密。
+- **密码加密**：PBKDF2-SHA256（250,000 次迭代）→ AES-256-GCM。基于密码的加密。
+- **多接收者加密**：PGP 风格的混合方案。生成随机 CEK（内容加密密钥），对每个接收者进行 ECDH 包装。
+
+#### 密钥派生
+
+使用 `derive_x25519_keypair` 从钱包签名派生 X25519 密钥对。
+
+#### 关键相关函数
+
+- [`derive_x25519_keypair()`](#derive_x25519_keypair)：从钱包签名派生 X25519 密钥对
+- [`dh_encrypt()`](#dh_encrypt) / [`dh_decrypt()`](#dh_decrypt)：DH 加密/解密
+- [`password_encrypt()`](#password_encrypt) / [`password_decrypt()`](#password_decrypt)：密码加密/解密
+- [`multi_encrypt()`](#multi_encrypt) / [`multi_decrypt()`](#multi_decrypt)：多接收者加密/解密
 
 ---
 
@@ -149,7 +173,7 @@ print(result['metadata'])  # 包含文件元数据的 JSON 字符串
 
 #### `request_connection()`
 
-| **参数** | `connection`：AsyncClient<br/>`signer`：Keypair<br/>`db_root_id`：数据库 ID（bytes 或 str）<br/>`party_a`：第一个用户公钥（str）<br/>`party_b`：第二个用户公钥（str）<br/>`table_name`：连接表名（str 或 bytes）<br/>`columns`：列列表（list[str 或 bytes]）<br/>`id_col`：ID 列（str 或 bytes）<br/>`ext_keys`：扩展键（list[str 或 bytes]） |
+| **参数** | `connection`：AsyncClient<br/>`signer`：Keypair 或 WalletSigner<br/>`db_root_id`：数据库 ID（bytes 或 str）<br/>`party_a`：第一个用户公钥（str）<br/>`party_b`：第二个用户公钥（str）<br/>`table_name`：连接表名（str 或 bytes）<br/>`columns`：列列表（list[str 或 bytes]）<br/>`id_col`：ID 列（str 或 bytes）<br/>`ext_keys`：扩展键（list[str 或 bytes]） |
 |----------------|--------------------------|
 | **返回值** | 交易签名（str） |
 
@@ -215,7 +239,7 @@ print(conn_info['status'])  # 'pending' | 'approved' | 'blocked'
 
 #### `write_connection_row()`
 
-| **参数** | `connection`：AsyncClient<br/>`signer`：Keypair<br/>`db_root_id`：数据库 ID（bytes 或 str）<br/>`connection_seed`：连接种子（bytes 或 str）<br/>`row_json`：JSON 数据（str） |
+| **参数** | `connection`：AsyncClient<br/>`signer`：Keypair 或 WalletSigner<br/>`db_root_id`：数据库 ID（bytes 或 str）<br/>`connection_seed`：连接种子（bytes 或 str）<br/>`row_json`：JSON 数据（str） |
 |----------------|--------------------------|
 | **返回值** | 交易签名（str） |
 
@@ -263,7 +287,7 @@ for conn in connections:
 
 #### `update_user_metadata()`
 
-| **参数** | `connection`：AsyncClient<br>`signer`：Keypair<br>`db_root_id`：数据库 ID（bytes 或 str）<br>`meta`：要存储的元数据（bytes 或 str） |
+| **参数** | `connection`：AsyncClient<br>`signer`：Keypair 或 WalletSigner<br>`db_root_id`：数据库 ID（bytes 或 str）<br>`meta`：要存储的元数据（bytes 或 str） |
 |----------|--------------------------|
 | **返回** | 交易签名（str） |
 
@@ -281,9 +305,31 @@ tx_sig = await writer.update_user_metadata(
 
 ### 表管理
 
+#### `create_table()`
+
+| **参数** | `connection`: AsyncClient<br/>`signer`: Keypair 或 WalletSigner<br/>`db_root_id`: 数据库 ID (bytes 或 str)<br/>`table_seed`: 表种子 (bytes 或 str)<br/>`table_name`: 表名 (bytes 或 str)<br/>`column_names`: 列名列表 (list[bytes 或 str])<br/>`id_col`: ID 列 (bytes 或 str)<br/>`ext_keys`: 扩展键 (list[bytes 或 str])<br/>`gate_mint`: 可选的代币门控 (Pubkey)<br/>`writers`: 可选的授权写入者 (list[Pubkey]) |
+|----------------|--------------------------|
+| **返回值** | 交易签名 (str) |
+
+如果 DbRoot PDA 空间不足，realloc 指令会自动添加到同一交易中。无需额外签名或手动空间管理。
+
+```python
+from iqlabs import writer
+
+await writer.create_table(
+    connection, signer, 'my-db', 'users',
+    'users',
+    ['name', 'email', 'age'],
+    'name',
+    []
+)
+```
+
+---
+
 #### `write_row()`
 
-| **参数** | `connection`：AsyncClient<br/>`signer`：Keypair<br/>`db_root_id`：数据库 ID（bytes 或 str）<br/>`table_seed`：表名（bytes 或 str）<br/>`row_json`：JSON 行数据（str）<br/>`skip_confirmation`：跳过交易确认（默认值：False）<br/>`remaining_accounts`：作为只读引用账户追加的 Pubkey 列表（可选，例如用于 feed PDA 索引） |
+| **参数** | `connection`：AsyncClient<br/>`signer`：Keypair 或 WalletSigner<br/>`db_root_id`：数据库 ID（bytes 或 str）<br/>`table_seed`：表名（bytes 或 str）<br/>`row_json`：JSON 行数据（str）<br/>`skip_confirmation`：跳过交易确认（默认值：False）<br/>`remaining_accounts`：作为只读引用账户追加的 Pubkey 列表（可选，例如用于 feed PDA 索引） |
 |----------------|--------------------------|
 | **返回值** | 交易签名（str） |
 
@@ -366,6 +412,114 @@ for tx in my_files:
 
 ---
 
+### 加密（Crypto）
+
+#### `derive_x25519_keypair()`
+
+| **参数** | `sign_message`：消息签名函数（async callable） |
+|----------------|--------------------------|
+| **返回值** | 包含 `priv_key` 和 `pub_key` 的字典 |
+
+```python
+from iqlabs import crypto
+
+# 从钱包签名派生 X25519 密钥对
+keypair = await crypto.derive_x25519_keypair(sign_message)
+print(keypair['pub_key'])  # 公钥（hex）
+```
+
+---
+
+#### `dh_encrypt()`
+
+| **参数** | `recipient_pub_hex`：接收者公钥（hex string）<br/>`plaintext`：要加密的数据 |
+|----------------|--------------------------|
+| **返回值** | 包含 `sender_pub`、`iv`、`ciphertext` 的字典 |
+
+```python
+from iqlabs import crypto
+
+# 使用 DH 加密向接收者加密数据
+encrypted = await crypto.dh_encrypt(recipient_pub_hex, plaintext)
+```
+
+---
+
+#### `dh_decrypt()`
+
+| **参数** | `priv_key`：私钥<br/>`sender_pub_hex`：发送者公钥（hex string）<br/>`iv_hex`：初始化向量（hex string）<br/>`ciphertext_hex`：密文（hex string） |
+|----------------|--------------------------|
+| **返回值** | bytes |
+
+```python
+from iqlabs import crypto
+
+# 解密 DH 加密的数据
+decrypted = crypto.dh_decrypt(priv_key, sender_pub_hex, iv_hex, ciphertext_hex)
+```
+
+---
+
+#### `password_encrypt()`
+
+| **参数** | `password`：加密密码<br/>`plaintext`：要加密的数据 |
+|----------------|--------------------------|
+| **返回值** | 包含 `salt`、`iv`、`ciphertext` 的字典 |
+
+```python
+from iqlabs import crypto
+
+# 使用密码加密数据
+encrypted = crypto.password_encrypt(password, plaintext)
+```
+
+---
+
+#### `password_decrypt()`
+
+| **参数** | `password`：解密密码<br/>`salt_hex`：盐值（hex string）<br/>`iv_hex`：初始化向量（hex string）<br/>`ciphertext_hex`：密文（hex string） |
+|----------------|--------------------------|
+| **返回值** | bytes |
+
+```python
+from iqlabs import crypto
+
+# 使用密码解密数据
+decrypted = crypto.password_decrypt(password, salt_hex, iv_hex, ciphertext_hex)
+```
+
+---
+
+#### `multi_encrypt()`
+
+| **参数** | `recipient_pub_hexes`：接收者公钥列表（list[str]）<br/>`plaintext`：要加密的数据 |
+|----------------|--------------------------|
+| **返回值** | 包含 `recipients`、`iv`、`ciphertext` 的字典 |
+
+```python
+from iqlabs import crypto
+
+# 为多个接收者加密数据
+encrypted = crypto.multi_encrypt(recipient_pub_hexes, plaintext)
+```
+
+---
+
+#### `multi_decrypt()`
+
+| **参数** | `priv_key`：私钥<br/>`pub_key_hex`：自己的公钥（hex string）<br/>`encrypted`：加密字典 |
+|----------------|--------------------------|
+| **返回值** | bytes |
+
+```python
+from iqlabs import crypto
+
+# 解密多接收者加密数据
+decrypted = crypto.multi_decrypt(priv_key, pub_key_hex, encrypted)
+```
+
+---
+
 ### 环境设置
 
 #### `set_rpc_url()`
@@ -396,7 +550,7 @@ set_rpc_url('https://your-rpc.example.com')
 
 | **模块** | `writer` |
 |------------|----------|
-| **参数** | `connection`：AsyncClient<br/>`signer`：Keypair<br/>`db_root_id`：数据库 ID（bytes 或 str）<br/>`seed`：表或连接种子（bytes 或 str）<br/>`row_json`：JSON 行数据（str）<br/>`table_name`：表编辑时必需（可选）<br/>`target_tx`：表编辑的参考交易（可选） |
+| **参数** | `connection`：AsyncClient<br/>`signer`：Keypair 或 WalletSigner<br/>`db_root_id`：数据库 ID（bytes 或 str）<br/>`seed`：表或连接种子（bytes 或 str）<br/>`row_json`：JSON 行数据（str）<br/>`table_name`：表编辑时必需（可选）<br/>`target_tx`：表编辑的参考交易（可选） |
 | **返回值** | 交易签名（str） |
 | **使用场景** | 自定义行管理、更新现有行 |
 

@@ -90,7 +90,7 @@ JSON-Daten in Tabellen speichern, ähnlich wie in einer Datenbank.
 
 #### Wie werden Tabellen erstellt?
 
-Es gibt keine spezielle „Tabelle erstellen"-Funktion. Der erste Schreibvorgang über [`write_row()`](#write_row) erstellt die Tabelle automatisch.
+Verwenden Sie [`create_table()`](#create_table), um eine Tabelle explizit zu erstellen. Wenn der DbRoot-PDA wenig Platz hat, erweitert das SDK ihn automatisch in derselben Transaktion — keine zusätzlichen Schritte erforderlich.
 
 <Note>
 Eine Tabelle wird eindeutig durch die Kombination aus `db_root_id` und `table_seed` (Tabellenname) identifiziert.
@@ -98,10 +98,34 @@ Eine Tabelle wird eindeutig durch die Kombination aus `db_root_id` und `table_se
 
 #### Wichtige zugehörige Funktionen
 
-- [`write_row()`](#write_row): Eine neue Zeile hinzufügen (erstellt die Tabelle, falls nicht vorhanden)
+- [`create_table()`](#create_table): Neue Tabelle erstellen (erweitert DbRoot bei Bedarf automatisch)
+- [`write_row()`](#write_row): Neue Zeile zu einer bestehenden Tabelle hinzufügen
 - [`read_table_rows()`](#read_table_rows): Zeilen aus einer Tabelle lesen
 - [`get_tablelist_from_root()`](#get_tablelist_from_root): Alle Tabellen in einer Datenbank auflisten
 - [`fetch_inventory_transactions()`](#fetch_inventory_transactions): Hochgeladene Dateien auflisten
+
+---
+
+### Verschlüsselung (Crypto)
+
+Das SDK bietet 3 Verschlüsselungsmodi und die Ableitung von Schlüsseln aus Wallet-Signaturen.
+
+#### Verschlüsselungsmodi
+
+- **DH (Diffie-Hellman) Verschlüsselung**: Ephemerer X25519 ECDH → HKDF-SHA256 → AES-256-GCM. Verschlüsselung für einen einzelnen Empfänger.
+- **Passwort-Verschlüsselung**: PBKDF2-SHA256 (250.000 Iterationen) → AES-256-GCM. Passwortbasierte Verschlüsselung.
+- **Multi-Empfänger-Verschlüsselung**: PGP-ähnliches Hybridverfahren. Zufälliger CEK (Content Encryption Key) wird generiert und per ECDH pro Empfänger verpackt.
+
+#### Schlüsselableitung
+
+Verwenden Sie `derive_x25519_keypair`, um ein X25519-Schlüsselpaar aus einer Wallet-Signatur abzuleiten.
+
+#### Wichtige zugehörige Funktionen
+
+- [`derive_x25519_keypair()`](#derive_x25519_keypair): X25519-Schlüsselpaar aus Wallet-Signatur ableiten
+- [`dh_encrypt()`](#dh_encrypt) / [`dh_decrypt()`](#dh_decrypt): DH-Verschlüsselung/-Entschlüsselung
+- [`password_encrypt()`](#password_encrypt) / [`password_decrypt()`](#password_decrypt): Passwort-Verschlüsselung/-Entschlüsselung
+- [`multi_encrypt()`](#multi_encrypt) / [`multi_decrypt()`](#multi_decrypt): Multi-Empfänger-Verschlüsselung/-Entschlüsselung
 
 ---
 
@@ -149,7 +173,7 @@ print(result['metadata'])  # JSON-String mit Datei-Metadaten
 
 #### `request_connection()`
 
-| **Parameter** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: Datenbank-ID (bytes oder str)<br/>`party_a`: Public Key des ersten Benutzers (str)<br/>`party_b`: Public Key des zweiten Benutzers (str)<br/>`table_name`: Name der Verbindungstabelle (str oder bytes)<br/>`columns`: Spaltenliste (list[str oder bytes])<br/>`id_col`: ID-Spalte (str oder bytes)<br/>`ext_keys`: Erweiterungsschlüssel (list[str oder bytes]) |
+| **Parameter** | `connection`: AsyncClient<br/>`signer`: Keypair oder WalletSigner<br/>`db_root_id`: Datenbank-ID (bytes oder str)<br/>`party_a`: Public Key des ersten Benutzers (str)<br/>`party_b`: Public Key des zweiten Benutzers (str)<br/>`table_name`: Name der Verbindungstabelle (str oder bytes)<br/>`columns`: Spaltenliste (list[str oder bytes])<br/>`id_col`: ID-Spalte (str oder bytes)<br/>`ext_keys`: Erweiterungsschlüssel (list[str oder bytes]) |
 |----------------|--------------------------|
 | **Rückgabe** | Transaktionssignatur (str) |
 
@@ -215,7 +239,7 @@ print(conn_info['status'])  # 'pending' | 'approved' | 'blocked'
 
 #### `write_connection_row()`
 
-| **Parameter** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: Datenbank-ID (bytes oder str)<br/>`connection_seed`: Verbindungs-Seed (bytes oder str)<br/>`row_json`: JSON-Daten (str) |
+| **Parameter** | `connection`: AsyncClient<br/>`signer`: Keypair oder WalletSigner<br/>`db_root_id`: Datenbank-ID (bytes oder str)<br/>`connection_seed`: Verbindungs-Seed (bytes oder str)<br/>`row_json`: JSON-Daten (str) |
 |----------------|--------------------------|
 | **Rückgabe** | Transaktionssignatur (str) |
 
@@ -263,7 +287,7 @@ for conn in connections:
 
 #### `update_user_metadata()`
 
-| **Parameter** | `connection`: AsyncClient<br>`signer`: Keypair<br>`db_root_id`: Datenbank-ID (bytes oder str)<br>`meta`: zu speichernde Metadaten (bytes oder str) |
+| **Parameter** | `connection`: AsyncClient<br>`signer`: Keypair oder WalletSigner<br>`db_root_id`: Datenbank-ID (bytes oder str)<br>`meta`: zu speichernde Metadaten (bytes oder str) |
 |----------|--------------------------|
 | **Rückgabe** | Transaktionssignatur (str) |
 
@@ -281,9 +305,31 @@ tx_sig = await writer.update_user_metadata(
 
 ### Tabellenverwaltung
 
+#### `create_table()`
+
+| **Parameter** | `connection`: AsyncClient<br/>`signer`: Keypair oder WalletSigner<br/>`db_root_id`: Datenbank-ID (bytes oder str)<br/>`table_seed`: Tabellen-Seed (bytes oder str)<br/>`table_name`: Tabellenname (bytes oder str)<br/>`column_names`: Spaltenliste (list[bytes oder str])<br/>`id_col`: ID-Spalte (bytes oder str)<br/>`ext_keys`: Erweiterungsschlüssel (list[bytes oder str])<br/>`gate_mint`: Optionales Token-Gate (Pubkey)<br/>`writers`: Optionale erlaubte Schreiber (list[Pubkey]) |
+|----------------|--------------------------|
+| **Rückgabe** | Transaktionssignatur (str) |
+
+Wenn der DbRoot-PDA wenig Platz hat, wird automatisch eine Realloc-Instruktion in derselben Transaktion vorangestellt. Keine zusätzliche Signierung oder manuelle Platzverwaltung erforderlich.
+
+```python
+from iqlabs import writer
+
+await writer.create_table(
+    connection, signer, 'my-db', 'users',
+    'users',
+    ['name', 'email', 'age'],
+    'name',
+    []
+)
+```
+
+---
+
 #### `write_row()`
 
-| **Parameter** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: Datenbank-ID (bytes oder str)<br/>`table_seed`: Tabellenname (bytes oder str)<br/>`row_json`: JSON-Zeilendaten (str)<br/>`skip_confirmation`: Transaktionsbestätigung überspringen (Standard: False)<br/>`remaining_accounts`: optionale Liste von Pubkey als schreibgeschützte Referenzkonten (z.B. Feed-PDA für Indexierung) |
+| **Parameter** | `connection`: AsyncClient<br/>`signer`: Keypair oder WalletSigner<br/>`db_root_id`: Datenbank-ID (bytes oder str)<br/>`table_seed`: Tabellenname (bytes oder str)<br/>`row_json`: JSON-Zeilendaten (str)<br/>`skip_confirmation`: Transaktionsbestätigung überspringen (Standard: False)<br/>`remaining_accounts`: optionale Liste von Pubkey als schreibgeschützte Referenzkonten (z.B. Feed-PDA für Indexierung) |
 |----------------|--------------------------|
 | **Rückgabe** | Transaktionssignatur (str) |
 
@@ -366,6 +412,114 @@ for tx in my_files:
 
 ---
 
+### Verschlüsselung (Crypto)
+
+#### `derive_x25519_keypair()`
+
+| **Parameter** | `sign_message`: Nachrichtensignaturfunktion (async callable) |
+|----------------|--------------------------|
+| **Rückgabe** | dict mit `priv_key` und `pub_key` |
+
+```python
+from iqlabs import crypto
+
+# X25519-Schlüsselpaar aus Wallet-Signatur ableiten
+keypair = await crypto.derive_x25519_keypair(sign_message)
+print(keypair['pub_key'])  # Öffentlicher Schlüssel (hex)
+```
+
+---
+
+#### `dh_encrypt()`
+
+| **Parameter** | `recipient_pub_hex`: öffentlicher Schlüssel des Empfängers (hex string)<br/>`plaintext`: zu verschlüsselnde Daten |
+|----------------|--------------------------|
+| **Rückgabe** | dict mit `sender_pub`, `iv`, `ciphertext` |
+
+```python
+from iqlabs import crypto
+
+# Daten mit DH-Verschlüsselung für den Empfänger verschlüsseln
+encrypted = await crypto.dh_encrypt(recipient_pub_hex, plaintext)
+```
+
+---
+
+#### `dh_decrypt()`
+
+| **Parameter** | `priv_key`: privater Schlüssel<br/>`sender_pub_hex`: öffentlicher Schlüssel des Senders (hex string)<br/>`iv_hex`: Initialisierungsvektor (hex string)<br/>`ciphertext_hex`: Chiffretext (hex string) |
+|----------------|--------------------------|
+| **Rückgabe** | bytes |
+
+```python
+from iqlabs import crypto
+
+# DH-verschlüsselte Daten entschlüsseln
+decrypted = crypto.dh_decrypt(priv_key, sender_pub_hex, iv_hex, ciphertext_hex)
+```
+
+---
+
+#### `password_encrypt()`
+
+| **Parameter** | `password`: Verschlüsselungspasswort<br/>`plaintext`: zu verschlüsselnde Daten |
+|----------------|--------------------------|
+| **Rückgabe** | dict mit `salt`, `iv`, `ciphertext` |
+
+```python
+from iqlabs import crypto
+
+# Daten mit Passwort verschlüsseln
+encrypted = crypto.password_encrypt(password, plaintext)
+```
+
+---
+
+#### `password_decrypt()`
+
+| **Parameter** | `password`: Entschlüsselungspasswort<br/>`salt_hex`: Salt (hex string)<br/>`iv_hex`: Initialisierungsvektor (hex string)<br/>`ciphertext_hex`: Chiffretext (hex string) |
+|----------------|--------------------------|
+| **Rückgabe** | bytes |
+
+```python
+from iqlabs import crypto
+
+# Mit Passwort verschlüsselte Daten entschlüsseln
+decrypted = crypto.password_decrypt(password, salt_hex, iv_hex, ciphertext_hex)
+```
+
+---
+
+#### `multi_encrypt()`
+
+| **Parameter** | `recipient_pub_hexes`: Liste öffentlicher Empfängerschlüssel (list[str])<br/>`plaintext`: zu verschlüsselnde Daten |
+|----------------|--------------------------|
+| **Rückgabe** | dict mit `recipients`, `iv`, `ciphertext` |
+
+```python
+from iqlabs import crypto
+
+# Daten für mehrere Empfänger verschlüsseln
+encrypted = crypto.multi_encrypt(recipient_pub_hexes, plaintext)
+```
+
+---
+
+#### `multi_decrypt()`
+
+| **Parameter** | `priv_key`: privater Schlüssel<br/>`pub_key_hex`: eigener öffentlicher Schlüssel (hex string)<br/>`encrypted`: Verschlüsselungs-dict |
+|----------------|--------------------------|
+| **Rückgabe** | bytes |
+
+```python
+from iqlabs import crypto
+
+# Multi-Empfänger-verschlüsselte Daten entschlüsseln
+decrypted = crypto.multi_decrypt(priv_key, pub_key_hex, encrypted)
+```
+
+---
+
 ### Umgebungseinstellungen
 
 #### `set_rpc_url()`
@@ -396,7 +550,7 @@ Einheitliche Funktion, die sowohl Tabellenzeilenschreibvorgänge als auch Verbin
 
 | **Modul** | `writer` |
 |------------|----------|
-| **Parameter** | `connection`: AsyncClient<br/>`signer`: Keypair<br/>`db_root_id`: Datenbank-ID (bytes oder str)<br/>`seed`: Tabellen- oder Verbindungs-Seed (bytes oder str)<br/>`row_json`: JSON-Zeilendaten (str)<br/>`table_name`: erforderlich für Tabellenbearbeitungen (optional)<br/>`target_tx`: Referenz-Transaktion für Tabellenbearbeitungen (optional) |
+| **Parameter** | `connection`: AsyncClient<br/>`signer`: Keypair oder WalletSigner<br/>`db_root_id`: Datenbank-ID (bytes oder str)<br/>`seed`: Tabellen- oder Verbindungs-Seed (bytes oder str)<br/>`row_json`: JSON-Zeilendaten (str)<br/>`table_name`: erforderlich für Tabellenbearbeitungen (optional)<br/>`target_tx`: Referenz-Transaktion für Tabellenbearbeitungen (optional) |
 | **Rückgabe** | Transaktionssignatur (str) |
 | **Anwendungsfall** | Benutzerdefinierte Zeilenverwaltung, Aktualisierung vorhandener Zeilen |
 
