@@ -1,0 +1,8 @@
+keypair.json
+*.keypair.json
+*-keypair.json
+.env
+.env.local
+node_modules/
+.DS_Store
+.idea/

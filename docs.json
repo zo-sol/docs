@@ -1,0 +1,58 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "IQLabs SDK",
+  "colors": {
+    "primary": "#00FF00",
+    "light": "#00FF00",
+    "dark": "#00CC00"
+  },
+  "modeToggle": {
+    "default": "dark",
+    "isHidden": true
+  },
+  "favicon": "/icon.png",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Overview",
+        "pages": ["index"]
+      },
+      {
+        "group": "Solana SDK",
+        "pages": ["docs-typescript", "docs-python"]
+      },
+      {
+        "group": "Ethereum SDK",
+        "pages": ["docs-ethereum"]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "X (Twitter)",
+          "href": "https://x.com/IQLabsOfficial",
+          "icon": "x-twitter"
+        },
+        {
+          "anchor": "GitHub",
+          "href": "https://github.com/IQCoreTeam/IQSdkUsageExampleCliTool",
+          "icon": "github"
+        }
+      ]
+    }
+  },
+  "logo": {
+    "light": "/logo/iqlabstitle.png",
+    "dark": "/logo/iqlabstitle.png"
+  },
+  "navbar": {
+    "links": []
+  },
+  "footer": {
+    "socials": {
+      "x": "https://x.com/IQLabsOfficial",
+      "github": "https://github.com/IQCoreTeam/IQSdkUsageExampleCliTool"
+    }
+  }
+}

@@ -1,0 +1,923 @@
+---
+title: "Ethereum SDK"
+description: "Core concepts and functions for the IQLabs Ethereum SDK"
+---
+
+<Note>
+This document is in progress and will be refined.
+</Note>
+
+<Warning>
+**Sepolia testnet only.** The contract is not deployed to Ethereum mainnet yet. Do not use real-value assets with this SDK. All examples and the default RPC target Sepolia.
+</Warning>
+
+The Ethereum port of the IQLabs SDK. Same primitives (on-chain data storage, IQDB tables, friend connections, and end-to-end encryption) built on `ethers v6` and a single deployed contract.
+
+## Installation
+
+```bash
+npm i @iqlabs-official/ethereum-sdk
+```
+
+The SDK ships as CommonJS for Node.js and works in browsers via any modern bundler.
+
+---
+
+## Network
+
+The default (and currently only) deployment lives on **Sepolia testnet** at:
+
+```
+0xa580a977a3103565993531d19536220A54783397
+```
+
+Mainnet deployment is not yet available.
+
+The reader RPC defaults to `https://rpc.sepolia.org`. Override it with [`setRpcUrl()`](#setrpcurl) or via the env vars `IQLABS_RPC_ENDPOINT`, `ETHEREUM_RPC_URL`, or `RPC_URL`.
+
+---
+
+## Wallet / Signer Setup
+
+Every writer function takes an `ethers.Signer`. The two common ways to obtain one:
+
+### Node.js (private key)
+
+```typescript
+import { Wallet, JsonRpcProvider } from 'ethers';
+
+const provider = new JsonRpcProvider('https://rpc.sepolia.org');
+const signer = new Wallet(privateKey, provider);
+```
+
+### Browser (MetaMask / injected wallet)
+
+```typescript
+import { BrowserProvider } from 'ethers';
+
+const provider = new BrowserProvider(window.ethereum);
+await provider.send('eth_requestAccounts', []);
+const signer = await provider.getSigner();
+```
+
+Reader functions don't need a signer. They use the RPC URL configured via [`setRpcUrl()`](#setrpcurl).
+
+---
+
+## Core Concepts
+
+These are the key concepts to know before using the IQLabs Ethereum SDK.
+
+---
+
+### Data Storage (Code In)
+
+This is how you store any data (files, text, JSON) on-chain. Data is inscribed into transaction calldata; nothing is written to contract storage. Reads reconstruct data by walking a linked list of transactions.
+
+#### How is it stored?
+
+Depending on data size, the SDK picks the optimal method:
+
+- **Inline (small)**: data fits in a single transaction's metadata field, no chunking
+- **Linked list (large)**: data is split into `CHUNK_SIZE` chunks, uploaded via `sendCode()` calls in batches up to ~96 KB each, and the tail tx hash is recorded
+
+#### Key related functions
+
+- [`codeIn()`](#codein): upload data and get a transaction hash
+- [`readCodeIn()`](#readcodein): read data back from a transaction hash
+
+---
+
+### User State
+
+Each address has an on-chain record managed by the contract. There is no separate account/PDA to initialize.
+
+#### What gets stored?
+
+- User-set metadata (name, profile, bio, anything you serialize and pass to `updateUserMetadata`)
+- `userTxChainTail`: the most recent inventory write, used as the head of the user's tx-chain
+
+#### When is it created?
+
+There is no explicit "create user" step. The first [`codeIn()`](#codein) call writes both the inventory entry and advances the chain tail. Each tx-chain write costs a small `BASIC_FEE` (0.0001 ETH) for the pointer-update step.
+
+---
+
+### Connection State
+
+An on-chain relationship between two addresses (friends, DM channels, etc.).
+
+#### What states can it have?
+
+- **pending** (`0`): a request was sent but not accepted yet
+- **approved** (`1`): the request was accepted and the users are connected
+- **blocked** (`2`): one side blocked the other
+
+<Warning>
+A blocked connection can only be unblocked by the blocker.
+</Warning>
+
+The connection seed is derived deterministically from the two addresses via [`deriveDmSeed(userA, userB)`](#derivedmseed) (sorted lowercase + keccak256), so either party can recompute it.
+
+#### Key related functions
+
+- [`requestConnection()`](#requestconnection): send a friend request (creates pending)
+- [`manageConnection()`](#manageconnection): approve/block/unblock a request
+- [`readConnection()`](#readconnection): check current relationship status
+- [`writeConnectionRow()`](#writeconnectionrow): exchange messages/data with a connected party
+- [`fetchUserConnections()`](#fetchuserconnections): fetch all of a user's connections
+
+---
+
+### Database Tables
+
+Store JSON data in tables like a database.
+
+#### How are tables created?
+
+1. Call [`initializeDbRoot()`](#initializedbroot) once per `dbRootId`. Only the address that calls this becomes the **DbRoot creator** (the only one allowed to update permissions or schema).
+2. Call [`createTable()`](#createtable) (public) or [`createTable(..., isPrivate=true)`](#createtable) (private) to create a table. The `LINKED_LIST_FEE` (0.0003 ETH) is charged here.
+3. Call [`writeRow()`](#writerow) to append rows.
+
+<Note>
+A table is uniquely identified by the combination of `dbRootId` and `tableName`. Both are hashed with `keccak256` internally to form mapping keys, but the raw names are also stored on-chain so the SDK can list them without a hardcoded lookup.
+</Note>
+
+Unlike the Solana SDK, **tables must exist before `writeRow()` is called**. `writeRow` reads the table's `txChainTail` for a staleness check, so there is no implicit creation.
+
+#### Key related functions
+
+- [`initializeDbRoot()`](#initializedbroot): claim a `dbRootId` and become its creator
+- [`manageTableCreators()`](#managetablecreators): set the public/private creator allowlists
+- [`createTable()`](#createtable) / [`updateTable()`](#updatetable): create or modify a table's schema/gate
+- [`writeRow()`](#writerow): append a row
+- [`readTableRows()`](#readtablerows): read rows from a table
+- [`getTablelistFromRoot()`](#gettablelistfromroot): list all tables in a database
+
+---
+
+### Token & Collection Gating
+
+Tables can be gated so that only users holding a specific ERC-20 token or ERC-721 collection can write data.
+
+#### Gate Types
+
+| Type | `gateType` | Description |
+|------|-----------|-------------|
+| **Token** (ERC-20) | `0` | User must hold &gt;= `amount` of the specified token contract |
+| **Collection** (ERC-721) | `1` | User must hold any NFT (balance &gt;= 1) from the specified collection contract |
+
+#### How it works
+
+The contract's gate check (`_requireGate`) calls `balanceOf(msg.sender)` on the configured contract:
+
+- If `tokenAddress == ZeroAddress` → no gate (public)
+- If `gateType == 0` (ERC-20) → `IERC20.balanceOf(user) >= amount`
+- If `gateType == 1` (ERC-721) → `IERC721.balanceOf(user) >= 1` (`amount` is **ignored**)
+
+<Warning>
+ERC-20 `amount` is in **raw token units (wei-style)**, not human-readable units. For an 18-decimal token, "100 tokens" must be passed as `parseEther("100")`, not `100`. If `amount == 0`, the contract treats it as `1`.
+</Warning>
+
+<Warning>
+**ERC-1155 is not supported.** The contract only knows the `balanceOf(address)` shape used by ERC-20/ERC-721. ERC-1155's `balanceOf(address, uint256)` will not be called.
+</Warning>
+
+#### Gate parameter
+
+```typescript
+gate?: {
+  tokenAddress: string;  // ERC-20 or ERC-721 contract (ZeroAddress for public)
+  amount: number | bigint; // min balance (raw units, ERC-20 only; ignored for ERC-721)
+  gateType: 0 | 1;       // 0 = ERC-20 token, 1 = ERC-721 NFT
+}
+```
+
+If the `gate` argument is omitted, it defaults to `{ tokenAddress: ZeroAddress, amount: 0, gateType: 0 }`, i.e. public.
+
+---
+
+### Table Creation Permissions
+
+The DbRoot creator (the address that called [`initializeDbRoot()`](#initializedbroot)) controls who is allowed to create tables.
+
+#### Two levels of table creation
+
+| Type | Function | Listed in `tables` array? | Permission field |
+|------|----------|---------------------------|------------------|
+| **Public table** | `createTable(..., isPrivate=false)` | yes, appears in [`getTablelistFromRoot().tables`](#gettablelistfromroot) | `tableCreators` |
+| **Private table** | `createTable(..., isPrivate=true)` | no, only in `globalTables` (you must know the name) | `extCreators` |
+
+<Note>
+Both `tableSeeds` and `globalTableSeeds` are stored on-chain in lockstep with their human-readable `tableNames` / `globalTableNames`. The SDK returns them already zipped as `TableEntry { name, seedHex }`.
+</Note>
+
+- If the permission list is **empty**, **anyone** can create tables in that bucket (default).
+- If the permission list has addresses, **only those addresses** can create tables in that bucket. The DbRoot creator is **not automatically allowed**. They must add themselves to the list if they want to create tables under a non-empty allowlist.
+
+#### Managing permissions
+
+The DbRoot creator can set both lists in a single call:
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+await iqlabs.writer.manageTableCreators(
+  signer,
+  'my-db',
+  [adminWallet1, adminWallet2],   // tableCreators: who can create public tables
+  []                              // extCreators: empty means anyone can create private tables
+);
+```
+
+Pass empty arrays to make creation public again.
+
+#### Onboarding (private → public)
+
+The contract supports promoting a private table (in `globalTables` only) into the public `tables` list via `onboardTable(dbRootId, tableName)`. This is callable by anyone in `tableCreators`.
+
+<Note>
+This is exposed at the contract ABI level but does **not** have a high-level SDK wrapper yet. Call it via the contract interface directly:
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+const c = iqlabs.contract.getContract(signer);
+const tx = await c.onboardTable(iqlabs.utils.toSeed('my-db'), 'my-board');
+await tx.wait();
+```
+
+The same caveat applies to `updateDbRootTableList` (replace the public table list wholesale): ABI-only, no SDK wrapper.
+</Note>
+
+---
+
+### Encryption (Crypto)
+
+The SDK includes a built-in encryption module (`iqlabs.crypto`) for encrypting data before storing it on-chain. The primitives are identical to the Solana SDK so the same plaintext can flow across chains.
+
+#### Three encryption modes
+
+- **DH Encryption** (single recipient): Ephemeral X25519 ECDH → HKDF-SHA256 → AES-256-GCM. Use when encrypting data for one specific recipient.
+- **Password Encryption**: PBKDF2-SHA256 (250k iterations) → AES-256-GCM. Use for password-protected data that anyone with the password can decrypt.
+- **Multi-recipient Encryption** (PGP-style hybrid): Generates a random content encryption key (CEK), encrypts data once, then wraps the CEK for each recipient via ECDH. Use when encrypting data for multiple recipients.
+
+#### Key derivation
+
+Users can derive a deterministic X25519 keypair from their wallet signature using [`deriveX25519Keypair()`](#derivex25519keypair). Their wallet *is* the key, no separate keystore.
+
+#### Key related functions
+
+- [`deriveX25519Keypair()`](#derivex25519keypair): derive encryption keypair from wallet
+- [`dhEncrypt()`](#dhencrypt) / [`dhDecrypt()`](#dhdecrypt): single-recipient encryption
+- [`passwordEncrypt()`](#passwordencrypt) / [`passwordDecrypt()`](#passworddecrypt): password-based encryption
+- [`multiEncrypt()`](#multiencrypt) / [`multiDecrypt()`](#multidecrypt): multi-recipient encryption
+
+---
+
+### Fees
+
+| Constant | Value | Charged when |
+|----------|-------|--------------|
+| `BASIC_FEE` | 0.0001 ETH | `updateUserTxChainTail` (every `codeIn()`) |
+| `LINKED_LIST_FEE` | 0.0003 ETH | `createTable`, `createPrivateTable`, `requestConnection`, `updateTableTxChainTail`, `updateConnectionTxChainTail` |
+
+These fees are paid in addition to gas. `writeRow()` and `writeConnectionRow()` each fire two transactions internally (data write + pointer update), and the pointer update is what charges `LINKED_LIST_FEE`.
+
+---
+
+## Function Details
+
+### Data Storage and Retrieval
+
+#### `codeIn()`
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`data`: data to upload (string or string[])<br/>`filename`: optional filename (string, default: `""`)<br/>`filetype`: file type hint (string, default: `""`; coerced to `"text/plain"` on-chain)<br/>`onProgress`: optional progress callback `(percent: number) => void` |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+// Upload inline data (small)
+const txHash = await iqlabs.writer.codeIn(signer, 'Hello, blockchain!');
+
+// Upload large data with progress + filename
+const txHash2 = await iqlabs.writer.codeIn(
+  signer,
+  longString,
+  'hello.txt',
+  'text/plain',
+  (pct) => console.log(`upload: ${pct.toFixed(1)}%`)
+);
+```
+
+Internally, this fires:
+1. (For large data) a series of `sendCode()` calls forming the linked list
+2. `userInventoryCodeIn(handle, tailTx, filetype, "0", beforeUserTx)`
+3. `updateUserTxChainTail(myTxHash)`: charges `BASIC_FEE` (0.0001 ETH)
+
+---
+
+#### `readCodeIn()`
+
+| **Parameters** | `txHash`: transaction hash (string)<br/>`onProgress`: optional progress callback `(percent: number) => void` |
+|----------------|--------------------------|
+| **Returns** | `{ metadata: { handle, typeField, offset, beforeUserTx }, data: string }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+const result = await iqlabs.reader.readCodeIn('0x5Xg7...');
+console.log(result.data);              // 'Hello, blockchain!'
+console.log(result.metadata.typeField); // 'text/plain'
+```
+
+For inline uploads, `data` is read directly from the `handle` field. For chunked uploads, the SDK walks the `sendCode` linked list starting from `tailTx` and concatenates the chunks.
+
+---
+
+### Connection Management
+
+#### `requestConnection()`
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`receiver`: counterparty address (string)<br/>`tableName`: connection table name (string)<br/>`columns`: column list (string[])<br/>`idCol`: ID column (string)<br/>`extKeys`: extension keys (string[], default: `[]`) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+await iqlabs.writer.requestConnection(
+  signer,
+  'my-db',
+  friendAddress,
+  'dm_table',
+  ['message', 'timestamp'],
+  'message_id'
+);
+```
+
+The connection seed is computed automatically from `(senderAddress, receiverAddress)` via [`deriveDmSeed()`](#derivedmseed). `LINKED_LIST_FEE` is charged here.
+
+---
+
+#### `manageConnection()`
+
+Approve, block, or unblock a connection. Status semantics:
+
+- `0`: pending (initial state, set by `requestConnection`)
+- `1`: approved
+- `2`: blocked
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`otherParty`: counterparty address (string)<br/>`dbRootId`: database ID (string)<br/>`newStatus`: new status (`0` \| `1` \| `2`) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+// Approve a friend request
+await iqlabs.writer.manageConnection(signer, friendAddress, 'my-db', 1);
+
+// Block
+await iqlabs.writer.manageConnection(signer, friendAddress, 'my-db', 2);
+```
+
+---
+
+#### `readConnection()`
+
+| **Parameters** | `dbRootId`: database ID (string)<br/>`partyA`: first wallet (string)<br/>`partyB`: second wallet (string) |
+|----------------|--------------------------|
+| **Returns** | `{ status: 'pending' \| 'approved' \| 'blocked' \| 'unknown', requester: 'a' \| 'b', blocker: 'a' \| 'b' \| 'none' }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+const { status, requester, blocker } = await iqlabs.reader.readConnection(
+  'my-db', addressA, addressB
+);
+console.log(status); // 'pending' | 'approved' | 'blocked' | 'unknown'
+```
+
+`'unknown'` means the connection record does not exist on-chain.
+
+---
+
+#### `writeConnectionRow()`
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`otherParty`: counterparty address (string)<br/>`dbRootId`: database ID (string)<br/>`rowJson`: JSON data (string)<br/>`onProgress`: optional progress callback `(percent: number) => void` |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+await iqlabs.writer.writeConnectionRow(
+  signer,
+  friendAddress,
+  'my-db',
+  JSON.stringify({ message_id: '123', message: 'Hello friend!', timestamp: Date.now() })
+);
+```
+
+The connection seed is derived automatically from the sender (`signer.getAddress()`) and `otherParty`. Internally fires `walletConnectionCodeIn` then `updateConnectionTxChainTail` (`LINKED_LIST_FEE`).
+
+---
+
+#### `readConnectionRows()`
+
+Read all rows previously written between two parties.
+
+| **Parameters** | `dbRootId`: database ID (string)<br/>`partyA`: first wallet (string)<br/>`partyB`: second wallet (string)<br/>`options`: `{ limit?: number }` (optional) |
+|----------------|--------------------------|
+| **Returns** | `Array<{ txHash: string, data: any }>` (most recent first; `data` is parsed JSON when possible) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+const messages = await iqlabs.reader.readConnectionRows(
+  'my-db', myAddress, friendAddress, { limit: 50 }
+);
+messages.forEach(m => console.log(m.txHash, m.data));
+```
+
+---
+
+#### `fetchUserConnections()`
+
+Fetch all connection records for a user. The contract maintains an indexed list of connection keys per address, so this is a direct on-chain read (no transaction-history scanning).
+
+| **Parameters** | `userAddress`: user address (string) |
+|----------------|--------------------------|
+| **Returns** | `Array<{ connectionKey: string, partyA: string, partyB: string, status: 'pending' \| 'approved' \| 'blocked' \| 'unknown' }>` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+const connections = await iqlabs.reader.fetchUserConnections(myAddress);
+
+const pending = connections.filter(c => c.status === 'pending');
+const friends = connections.filter(c => c.status === 'approved');
+const blocked = connections.filter(c => c.status === 'blocked');
+```
+
+<Note>
+Unlike the Solana SDK's `fetchUserConnections`, the result does **not** include `dbRootId`, `requester`, `blocker`, or `timestamp`. To get those, call [`readConnection()`](#readconnection) for the specific pair.
+</Note>
+
+---
+
+### Table Management
+
+#### `initializeDbRoot()`
+
+Claim a `dbRootId` and register the caller as its creator. Only the creator can later modify table-creator allowlists or schema.
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+await iqlabs.writer.initializeDbRoot(signer, 'my-db');
+```
+
+Reverts if the `dbRootId` was already initialized.
+
+---
+
+#### `manageTableCreators()`
+
+Set both creator allowlists. **Caller must be the DbRoot creator.**
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableCreators`: addresses allowed to create public tables (`string[]`)<br/>`extCreators`: addresses allowed to create private tables (`string[]`) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+await iqlabs.writer.manageTableCreators(
+  signer,
+  'my-db',
+  [admin1, admin2],   // public-table allowlist
+  []                  // anyone can create private tables
+);
+```
+
+Pass empty arrays to make creation open to anyone.
+
+---
+
+#### `createTable()`
+
+Create a new table. Charges `LINKED_LIST_FEE` (0.0003 ETH).
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`columns`: column names (string[])<br/>`idCol`: ID column (string)<br/>`extKeys`: extension keys (string[], default: `[]`)<br/>`gate`: optional access gate, see [Token & Collection Gating](#token--collection-gating)<br/>`writers`: optional writer whitelist (`string[]`, default: `[]`)<br/>`isPrivate`: create private table (boolean, default: `false`) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+import { ZeroAddress, parseEther } from 'ethers';
+
+// Public table: appears in getTablelistFromRoot().tables
+await iqlabs.writer.createTable(
+  signer, 'my-db', 'users', ['name', 'email'], 'user_id'
+);
+
+// Private table: only in globalTables, callers must know the name
+await iqlabs.writer.createTable(
+  signer, 'my-db', 'secret_log', ['entry'], 'entry_id', [],
+  undefined, [], true   // <-- isPrivate = true
+);
+
+// ERC-20 gated table: must hold >= 100 tokens (assuming 18 decimals)
+await iqlabs.writer.createTable(
+  signer, 'my-db', 'vip', ['name'], 'user_id', [],
+  { tokenAddress: erc20Address, amount: parseEther('100'), gateType: 0 }
+);
+
+// ERC-721 gated table: must hold any 1 NFT from collection
+await iqlabs.writer.createTable(
+  signer, 'my-db', 'holders', ['name'], 'user_id', [],
+  { tokenAddress: nftAddress, amount: 0, gateType: 1 }
+);
+
+// Writer-restricted table (only listed addresses can writeRow)
+await iqlabs.writer.createTable(
+  signer, 'my-db', 'staff_only', ['note'], 'note_id', [],
+  undefined,
+  [staff1, staff2]
+);
+```
+
+<Note>
+`writers` is a per-table allowlist enforced inside `dbCodeIn`/`updateTableTxChainTail`. Empty array = anyone (subject to gate). The `writers` check is independent of the table-creator check.
+</Note>
+
+---
+
+#### `updateTable()`
+
+Modify an existing table's schema, gate, or writer list. **Caller must be the DbRoot creator.** Existing rows (`txChainTail`) are preserved.
+
+| **Parameters** | Same as [`createTable()`](#createtable) **minus** `isPrivate`. |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+// Tighten the gate on an existing table
+await iqlabs.writer.updateTable(
+  signer, 'my-db', 'vip', ['name'], 'user_id', [],
+  { tokenAddress: erc20Address, amount: parseEther('500'), gateType: 0 }
+);
+```
+
+---
+
+#### `writeRow()`
+
+Append a row to an existing table. Charges `LINKED_LIST_FEE` (0.0003 ETH) for the pointer update.
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`rowJson`: JSON row data (string)<br/>`onProgress`: optional progress callback `(percent: number) => void` |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+await iqlabs.writer.writeRow(signer, 'my-db', 'users', JSON.stringify({
+  id: 1, name: 'Alice', email: 'alice@example.com'
+}));
+```
+
+<Warning>
+The table must already exist. There is no implicit creation. `writeRow` reads `txChainTail` for staleness check and reverts if the table was never created.
+</Warning>
+
+This call fires two transactions: `dbCodeIn` (write) and `updateTableTxChainTail` (pointer + fee). The SDK awaits both before returning.
+
+---
+
+#### `readTableRows()`
+
+Walk the table's tx-chain backwards from the tail and reconstruct each row.
+
+| **Parameters** | `dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`options`: `{ limit?: number }` (optional) |
+|----------------|--------------------------|
+| **Returns** | `Array<{ txHash: string, data: any }>` (most recent first; `data` is the parsed JSON object, or the raw string if parsing fails) |
+
+```typescript
+const rows = await iqlabs.reader.readTableRows('my-db', 'users', { limit: 50 });
+rows.forEach(r => console.log(r.txHash, r.data));
+```
+
+---
+
+#### `getTablelistFromRoot()`
+
+Returns both the public and global table lists for a DbRoot.
+
+| **Parameters** | `dbRootId`: database ID (string) |
+|----------------|--------------------------|
+| **Returns** | `{ creator: string, tables: TableEntry[], globalTables: TableEntry[] }` where `TableEntry = { name: string, seedHex: string }` |
+
+```typescript
+const { creator, tables, globalTables } = await iqlabs.reader.getTablelistFromRoot('my-db');
+
+console.log('Creator:', creator);
+tables.forEach(t => console.log(`public: ${t.name} (${t.seedHex})`));
+globalTables.forEach(t => console.log(`all:    ${t.name} (${t.seedHex})`));
+```
+
+`tables` only contains public tables (created with `isPrivate=false`). `globalTables` contains every table ever created under this root, public or private.
+
+---
+
+#### `fetchInventoryTransactions()`
+
+Walk a user's inventory tx-chain (everything they uploaded via [`codeIn()`](#codein)).
+
+| **Parameters** | `userAddress`: user address (string)<br/>`options`: `{ limit?: number }` (optional) |
+|----------------|--------------------------|
+| **Returns** | `Array<{ txHash: string, handle: string, tailTx: string, typeField: string, offset: string }>` |
+
+```typescript
+const myFiles = await iqlabs.reader.fetchInventoryTransactions(myAddress, { limit: 20 });
+myFiles.forEach(tx => {
+  console.log(`${tx.txHash}: ${tx.handle} (${tx.typeField})`);
+});
+```
+
+For inline uploads, `tailTx` is empty and `handle` *is* the data. For chunked uploads, `handle` is the filename and `tailTx` points to the linked-list tail (use [`readCodeIn()`](#readcodein) to reconstruct).
+
+---
+
+### Encryption
+
+#### `deriveX25519Keypair()`
+
+Derive a deterministic X25519 keypair from a wallet signature. The same wallet always produces the same keypair (the message and HKDF parameters are fixed protocol constants).
+
+| **Parameters** | `signMessage`: `(msg: Uint8Array) => Promise<Uint8Array>` |
+|----------------|--------------------------|
+| **Returns** | `{ privKey: Uint8Array, pubKey: Uint8Array }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+import { getBytes } from 'ethers';
+
+// ethers `signMessage` returns a hex string; convert it to bytes for the SDK.
+const sign = async (msg: Uint8Array) => getBytes(await signer.signMessage(msg));
+
+const { privKey, pubKey } = await iqlabs.crypto.deriveX25519Keypair(sign);
+```
+
+---
+
+#### `dhEncrypt()`
+
+| **Parameters** | `recipientPubHex`: recipient's X25519 public key (hex string)<br/>`plaintext`: data to encrypt (Uint8Array) |
+|----------------|--------------------------|
+| **Returns** | `{ senderPub: string, iv: string, ciphertext: string }` (all hex) |
+
+#### `dhDecrypt()`
+
+| **Parameters** | `privKey`: recipient's private key (Uint8Array)<br/>`senderPubHex`: sender's ephemeral public key (hex string)<br/>`ivHex`: IV (hex string)<br/>`ciphertextHex`: ciphertext (hex string) |
+|----------------|--------------------------|
+| **Returns** | `Uint8Array` (decrypted plaintext) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+const enc = await iqlabs.crypto.dhEncrypt(
+  recipientPubHex,
+  new TextEncoder().encode('secret message')
+);
+
+const dec = await iqlabs.crypto.dhDecrypt(
+  myPrivKey, enc.senderPub, enc.iv, enc.ciphertext
+);
+console.log(new TextDecoder().decode(dec));
+```
+
+---
+
+#### `passwordEncrypt()`
+
+| **Parameters** | `password`: password (string)<br/>`plaintext`: data to encrypt (Uint8Array) |
+|----------------|--------------------------|
+| **Returns** | `{ salt: string, iv: string, ciphertext: string }` (all hex) |
+
+#### `passwordDecrypt()`
+
+| **Parameters** | `password`: password (string)<br/>`saltHex`: salt (hex string)<br/>`ivHex`: IV (hex string)<br/>`ciphertextHex`: ciphertext (hex string) |
+|----------------|--------------------------|
+| **Returns** | `Uint8Array` (decrypted plaintext) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+const enc = await iqlabs.crypto.passwordEncrypt(
+  'my-password',
+  new TextEncoder().encode('secret data')
+);
+
+const dec = await iqlabs.crypto.passwordDecrypt(
+  'my-password', enc.salt, enc.iv, enc.ciphertext
+);
+```
+
+---
+
+#### `multiEncrypt()`
+
+| **Parameters** | `recipientPubHexes`: recipient public keys (string[])<br/>`plaintext`: data to encrypt (Uint8Array) |
+|----------------|--------------------------|
+| **Returns** | `{ recipients: RecipientEntry[], iv: string, ciphertext: string }` |
+
+#### `multiDecrypt()`
+
+| **Parameters** | `privKey`: your private key (Uint8Array)<br/>`pubKeyHex`: your public key (hex string)<br/>`encrypted`: the `MultiEncryptResult` object |
+|----------------|--------------------------|
+| **Returns** | `Uint8Array` (decrypted plaintext) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+// Encrypt for multiple recipients
+const enc = await iqlabs.crypto.multiEncrypt(
+  [alicePubHex, bobPubHex, carolPubHex],
+  new TextEncoder().encode('group secret')
+);
+
+// Each recipient decrypts with their own key
+const plaintext = await iqlabs.crypto.multiDecrypt(alicePrivKey, alicePubHex, enc);
+```
+
+Duplicate recipients in `recipientPubHexes` are deduplicated automatically.
+
+---
+
+### User Metadata
+
+#### `updateUserMetadata()`
+
+Store arbitrary metadata under the caller's address. Overwrites any previous value.
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`metadata`: `string \| Uint8Array` |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+await iqlabs.writer.updateUserMetadata(
+  signer,
+  JSON.stringify({ name: 'Alice', bio: 'gm' })
+);
+```
+
+The data is stored on-chain as raw `bytes` (UTF-8 encoded if you pass a string).
+
+---
+
+### Environment Settings
+
+#### `setRpcUrl()`
+
+Override the RPC URL used by all reader functions. Default: `https://rpc.sepolia.org`.
+
+| **Parameters** | `url`: Ethereum RPC URL (string) |
+|----------------|--------------------------|
+| **Returns** | void |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setRpcUrl('https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY');
+```
+
+<Note>
+Writers (`signer`-based functions) use the provider attached to the `Signer` they receive. `setRpcUrl` does **not** affect them. The setting only routes reader RPC calls.
+</Note>
+
+If `setRpcUrl` is never called, the SDK falls back to env vars in this order: `IQLABS_RPC_ENDPOINT`, `ETHEREUM_RPC_URL`, `RPC_URL`, then the default.
+
+#### `getRpcUrl()`
+
+Returns the currently active RPC URL (resolving the same fallback chain).
+
+| **Returns** | `string` |
+
+```typescript
+console.log(iqlabs.getRpcUrl());
+```
+
+---
+
+## Advanced Functions
+
+<Warning>
+These are low-level SDK functions. Not needed for typical usage, but useful when building custom features or debugging.
+</Warning>
+
+### Writer Functions
+
+#### `manageRowData()`
+
+Overwrite or annotate a previously written row by referencing its `targetTx` hash. The new row joins the table's tx-chain like any other write, but `targetTx` records the row this entry refers to.
+
+| **Module** | `writer` |
+|------------|----------|
+| **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`rowJson`: JSON row data (string)<br/>`targetTx`: tx hash of the row being managed (string) |
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+await iqlabs.writer.manageRowData(
+  signer, 'my-db', 'users',
+  JSON.stringify({ id: 1, name: 'Updated Name' }),
+  originalRowTxHash
+);
+```
+
+Internally fires `dbInstructionCodeIn` + `updateTableTxChainTail`. The contract also stamps `instructionTableTimestamps[dbRootId][tableSeed]` with the current block timestamp.
+
+---
+
+#### `prepareUpload()` / `uploadLinkedList()` / `toChunks()`
+
+Lower-level helpers exposed for building custom upload flows. Most users should use [`codeIn()`](#codein) instead.
+
+- `toChunks(data)`: split a string into `CHUNK_SIZE` (850 byte) chunks
+- `uploadLinkedList(signer, chunks, onProgress?)`: upload chunks via batched `sendCode` calls, return tail tx hash
+- `prepareUpload(signer, data, onProgress?)`: decide inline vs linked-list, return `{ onChainPath, metadata }`
+
+---
+
+### Reader Functions
+
+#### `readUserState()`
+
+Read raw on-chain state for a user.
+
+| **Module** | `reader` |
+|------------|----------|
+| **Parameters** | `userAddress`: user address (string) |
+| **Returns** | `{ metadata: string \| null, txChainTail: string }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+const state = await iqlabs.reader.readUserState(myAddress);
+console.log('metadata:', state.metadata);     // UTF-8 decoded, or null if empty
+console.log('chain tail:', state.txChainTail);
+```
+
+---
+
+#### `fetchTableMeta()`
+
+Read a table's full schema and current `txChainTail`.
+
+| **Module** | `reader` |
+|------------|----------|
+| **Parameters** | `dbRootId`: database ID (string)<br/>`tableName`: table name (string) |
+| **Returns** | Raw table struct (`name`, `columnNames`, `idCol`, `extKeys`, `gate`, `writers`, `txChainTail`, etc.) |
+
+---
+
+#### `readSendCodeChain()` / `walkCalldataChain()` / `isEnd()`
+
+Tx-chain traversal primitives:
+
+- `readSendCodeChain(tailTx, onProgress?)`: reconstruct a `sendCode` linked list, returning the concatenated payload
+- `walkCalldataChain(tailTx, beforeArg, options?)`: walk any tx chain backwards by following the named "before" argument
+- `isEnd(tx)`: returns `true` if the value represents end-of-chain (empty / `"Genesis"` / zero hash)
+
+---
+
+### Utility Functions
+
+#### `deriveDmSeed()`
+
+Compute the deterministic connection seed for a pair of addresses. Sorts the two addresses lowercase, joins with `:`, and hashes with keccak256.
+
+| **Module** | `utils` |
+|------------|----------|
+| **Parameters** | `userA`: first address (string)<br/>`userB`: second address (string) |
+| **Returns** | `string` (32-byte hex with `0x` prefix) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+const seed1 = iqlabs.utils.deriveDmSeed(walletA, walletB);
+const seed2 = iqlabs.utils.deriveDmSeed(walletB, walletA);
+// seed1 === seed2 (order doesn't matter)
+```
+
+---
+
+### Crypto Utilities
+
+`hexToBytes(hex)`, `bytesToHex(bytes)`, `validatePubKey(hex, name)` are exported under `iqlabs.crypto` for convenience.
