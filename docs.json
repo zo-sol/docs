@@ -25,6 +25,10 @@
       {
         "group": "Ethereum SDK",
         "pages": ["docs-ethereum"]
+      },
+      {
+        "group": "Monad",
+        "pages": ["docs-monad"]
       }
     ],
     "global": {
