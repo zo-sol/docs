@@ -8,10 +8,10 @@ This document is in progress and will be refined.
 </Note>
 
 <Warning>
-**Monad mainnet** is live and supported. Contract is deployed and ready. Switch with [`setNetwork('monad')`](#setnetwork).
+**Monad mainnet** and **Monad testnet** are both live and supported. Switch with [`setNetwork('monad')`](#setnetwork) or [`setNetwork('monadTestnet')`](#testnet). New to Monad? Start on testnet with free MON see [Testnet](#testnet).
 </Warning>
 
-The IQLabs Ethereum SDK works on Monad out of the box — same API, one line to switch networks. Store data on-chain, build databases, send encrypted DMs, gate content by token ownership. Monad is fast and cheap, so everything just works better.
+The IQLabs Ethereum SDK works on Monad out of the box. Same API, one line to switch networks. Store data on-chain, build databases, send encrypted DMs, gate content by token ownership. Monad is fast and cheap, so everything just works better.
 
 ## Installation
 
@@ -25,18 +25,92 @@ The SDK ships as CommonJS for Node.js and works in browsers via any modern bundl
 
 ## Network
 
-The SDK ships with two network modes. Set Monad once at app startup with [`setNetwork()`](#setnetwork).
+The SDK ships with three network modes. Set the one you want once at app startup with [`setNetwork()`](#setnetwork).
 
 | Mode | Chain ID | Currency | Contract | Default RPC |
 |------|---------:|----------|----------|-------------|
 | `sepolia` | 11155111 | ETH | [`0xB1C16271954c7238672c3666FD22Ee14C6d065Db`](https://sepolia.etherscan.io/address/0xB1C16271954c7238672c3666FD22Ee14C6d065Db) | `https://rpc.sepolia.org` |
 | `monad`   | 143      | MON | [`0xeFd9376835076Bf8d83826F6A2277BB5362Cd893`](https://monadvision.com/address/0xeFd9376835076Bf8d83826F6A2277BB5362Cd893) | `https://rpc.monad.xyz` |
+| `monadTestnet` | 10143 | MON | [`0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223`](https://testnet.monadexplorer.com/address/0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223) | `https://testnet-rpc.monad.xyz` |
 
 ```typescript
 import iqlabs from '@iqlabs-official/ethereum-sdk';
 
-iqlabs.setNetwork('monad'); // call once at app startup
+iqlabs.setNetwork('monad'); // mainnet call once at app startup
+// or, for free testing:
+iqlabs.setNetwork('monadTestnet');
 ```
+
+<Note>
+The contract is identical across all three networks (same ABI, same functions). Only the address, chain, and fees differ. The SDK reads fees on-chain, so you never hardcode them.
+</Note>
+
+---
+
+## Testnet
+
+Develop and test for free on **Monad testnet** before touching mainnet. The contract is deployed and verified there with the same fees as mainnet, so testnet is an exact rehearsal.
+
+### 1. Get free testnet MON
+
+You need testnet MON to pay fees. Grab some from the official faucet:
+
+1. Go to [faucet.monad.xyz](https://faucet.monad.xyz/)
+2. Paste your wallet address
+3. Request testnet MON arrives in seconds
+
+<Note>
+The faucet hands out a modest amount per request (about **20 MON** at a time, with roughly **25 MON** extra if you connect a social account). Since fees mirror mainnet (`BASIC_FEE` 6.5 MON, `LINKED_LIST_FEE` 19.5 MON), claim a couple of times if you plan to run many writes.
+</Note>
+
+<Warning>
+Testnet MON has no real value and only works on chain ID `10143`. Never send it to a mainnet address.
+</Warning>
+
+### 2. Point the SDK at testnet
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('monadTestnet'); // resolves the testnet contract + RPC
+```
+
+That's the only change. Every reader/writer call now targets the testnet deployment. `codeIn`, `writeRow`, connections, and encryption all behave exactly as on mainnet.
+
+### 3. Wallet setup for testnet
+
+For a Node.js signer, point your provider at the testnet RPC:
+
+```typescript
+import { Wallet, JsonRpcProvider } from 'ethers';
+
+const provider = new JsonRpcProvider('https://testnet-rpc.monad.xyz');
+const signer = new Wallet(process.env.PRIVATE_KEY!, provider);
+```
+
+For MetaMask, add the testnet network:
+
+| Field | Value |
+|-------|-------|
+| Network Name | Monad Testnet |
+| RPC URL | `https://testnet-rpc.monad.xyz` |
+| Chain ID | `10143` |
+| Currency Symbol | `MON` |
+| Block Explorer | `https://testnet.monadexplorer.com` |
+
+<Note>
+Use [`assertChainMatches(signer)`](#assertchainmatches) after `setNetwork('monadTestnet')` to catch a signer that's still pointed at the wrong chain before you send a transaction.
+</Note>
+
+### 4. Going to mainnet
+
+When your app works on testnet, switch one line:
+
+```typescript
+iqlabs.setNetwork('monad'); // mainnet uses real MON
+```
+
+No other code changes. The same `dbRootId`s and table names will be **separate** on mainnet (different chain, different contract state), so you re-create them there.
 
 ---
 
@@ -74,7 +148,7 @@ await provider.send('eth_requestAccounts', []);
 const signer = await provider.getSigner();
 ```
 
-Reader functions don't need a signer — they use the RPC configured via [`setRpcUrl()`](#setrpcurl).
+Reader functions don't need a signer they use the RPC configured via [`setRpcUrl()`](#setrpcurl).
 
 ---
 
@@ -84,7 +158,7 @@ Reader functions don't need a signer — they use the RPC configured via [`setRp
 
 ### Data Storage (Code In)
 
-Store any data (files, text, JSON) directly on-chain. Data lives in transaction calldata — nothing goes to a centralized server. Reads reconstruct data by walking a linked list of transactions.
+Store any data (files, text, JSON) directly on-chain. Data lives in transaction calldata, not on a centralized server. Reads reconstruct data by walking a linked list of transactions.
 
 #### How is it stored?
 
@@ -111,7 +185,7 @@ Each address has an on-chain record managed by the contract. No separate account
 
 #### When is it created?
 
-No explicit "create user" step. The first [`codeIn()`](#codein) call writes both the inventory entry and advances the chain tail. Each tx-chain write costs a small `BASIC_FEE` (0.0001 MON).
+No explicit "create user" step. The first [`codeIn()`](#codein) call writes both the inventory entry and advances the chain tail. Each tx-chain write costs a small `BASIC_FEE` (6.5 MON).
 
 ---
 
@@ -129,7 +203,7 @@ An on-chain relationship between two addresses (friends, DM channels, etc.).
 A blocked connection can only be unblocked by the blocker.
 </Warning>
 
-The connection seed is derived deterministically from the two addresses via [`deriveDmSeed(userA, userB)`](#derivedmseed) — either party can recompute it.
+The connection seed is derived deterministically from the two addresses via [`deriveDmSeed(userA, userB)`](#derivedmseed), so either party can recompute it.
 
 #### Key related functions
 
@@ -143,19 +217,19 @@ The connection seed is derived deterministically from the two addresses via [`de
 
 ### Database Tables
 
-Store JSON data in tables like a database — all on-chain.
+Store JSON data in tables like a database, all on-chain.
 
 #### How are tables created?
 
 1. Call [`initializeDbRoot()`](#initializedbroot) once per `dbRootId`. The caller becomes the **DbRoot creator**.
-2. Call [`createTable()`](#createtable) to create a table. `LINKED_LIST_FEE` (0.0003 MON) is charged here.
+2. Call [`createTable()`](#createtable) to create a table. `LINKED_LIST_FEE` (19.5 MON) is charged here.
 3. Call [`writeRow()`](#writerow) to append rows.
 
 <Note>
 A table is uniquely identified by `dbRootId` + `tableName`. Both are hashed with `keccak256` internally, but raw names are also stored on-chain so the SDK can list them without a hardcoded lookup.
 </Note>
 
-Tables must exist before `writeRow()` is called — there is no implicit creation.
+Tables must exist before `writeRow()` is called. There is no implicit creation.
 
 #### Key related functions
 
@@ -200,15 +274,15 @@ gate?: {
 
 ### Encryption (Crypto)
 
-Built-in encryption module (`iqlabs.crypto`) for encrypting data before storing on-chain. Primitives are identical to the Solana SDK — same plaintext flows across chains.
+Built-in encryption module (`iqlabs.crypto`) for encrypting data before storing on-chain. Primitives are identical to the Solana SDK, so the same plaintext flows across chains.
 
 #### Three encryption modes
 
 - **DH Encryption** (single recipient): Ephemeral X25519 ECDH → HKDF-SHA256 → AES-256-GCM
 - **Password Encryption**: PBKDF2-SHA256 (250k iterations) → AES-256-GCM
-- **Multi-recipient Encryption**: PGP-style hybrid — one CEK, wrapped per recipient via ECDH
+- **Multi-recipient Encryption**: PGP-style hybrid, one CEK wrapped per recipient via ECDH
 
-Users derive a deterministic X25519 keypair from their wallet signature — the wallet *is* the key, no separate keystore.
+Users derive a deterministic X25519 keypair from their wallet signature. The wallet *is* the key, no separate keystore.
 
 ---
 
@@ -216,10 +290,10 @@ Users derive a deterministic X25519 keypair from their wallet signature — the 
 
 | Constant | Value | Charged when |
 |----------|-------|--------------|
-| `BASIC_FEE` | 0.0001 MON | Every `codeIn()` |
-| `LINKED_LIST_FEE` | 0.0003 MON | `createTable`, `requestConnection`, `writeRow`, `writeConnectionRow` |
+| `BASIC_FEE` | 6.5 MON | Every `codeIn()` |
+| `LINKED_LIST_FEE` | 19.5 MON | `createTable`, `requestConnection`, `writeRow`, `writeConnectionRow` |
 
-Monad is fast and cheap — these fees are tiny.
+Monad is fast and cheap, so these fees are tiny.
 
 ---
 
@@ -294,7 +368,7 @@ await iqlabs.writer.requestConnection(
 );
 ```
 
-`LINKED_LIST_FEE` (0.0003 MON) charged here.
+`LINKED_LIST_FEE` (19.5 MON) charged here.
 
 ---
 
@@ -441,7 +515,7 @@ await iqlabs.writer.manageTableCreators(
 
 #### `createTable()`
 
-Create a new table. Charges `LINKED_LIST_FEE` (0.0003 MON).
+Create a new table. Charges `LINKED_LIST_FEE` (19.5 MON).
 
 | **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`columns`: column names (string[])<br/>`idCol`: ID column (string)<br/>`extKeys`: extension keys (string[], default: `[]`)<br/>`gate`: optional access gate<br/>`writers`: optional writer whitelist (`string[]`, default: `[]`)<br/>`isPrivate`: create private table (boolean, default: `false`) |
 |----------------|--------------------------|
@@ -503,7 +577,7 @@ await iqlabs.writer.updateTable(
 
 #### `writeRow()`
 
-Append a row to an existing table. Charges `LINKED_LIST_FEE` (0.0003 MON).
+Append a row to an existing table. Charges `LINKED_LIST_FEE` (19.5 MON).
 
 | **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`rowJson`: JSON row data (string)<br/>`onProgress`: optional progress callback `(percent: number) => void` |
 |----------------|--------------------------|
@@ -687,7 +761,7 @@ await iqlabs.writer.updateUserMetadata(
 
 Switch the active network mode. Call once at app startup.
 
-| **Parameters** | `mode`: `'sepolia' \| 'monad'`<br/>`rpcUrl`: optional override (string) |
+| **Parameters** | `mode`: `'sepolia' \| 'monad' \| 'monadTestnet'`<br/>`rpcUrl`: optional override (string) |
 |----------------|--------------------------|
 | **Returns** | void |
 
@@ -702,7 +776,7 @@ iqlabs.setNetwork('monad', 'https://your-monad-rpc');
 
 #### `getNetwork()`
 
-| **Returns** | `'sepolia' \| 'monad'` |
+| **Returns** | `'sepolia' \| 'monad' \| 'monadTestnet'` |
 
 ```typescript
 console.log(iqlabs.getNetwork()); // 'monad'
@@ -765,7 +839,7 @@ async function setupFortuneJar(signer: any) {
   }
 }
 
-// Submit a fortune (costs 0.0003 MON)
+// Submit a fortune (costs 19.5 MON)
 async function submitFortune(signer: any, fortune: string) {
   iqlabs.setNetwork('monad');
   const author = await signer.getAddress();
