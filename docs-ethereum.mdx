@@ -108,7 +108,7 @@ Each address has an on-chain record managed by the contract. There is no separat
 
 #### When is it created?
 
-There is no explicit "create user" step. The first [`codeIn()`](#codein) call writes both the inventory entry and advances the chain tail. Each tx-chain write costs a small `BASIC_FEE` (0.0001 ETH) for the pointer-update step.
+There is no explicit "create user" step. The first [`codeIn()`](#codein) call writes both the inventory entry and advances the chain tail. Each `codeIn()` charges `basicFee` (0.0001 ETH) for an inline payload or `linkedListFee` (0.0003 ETH) when the data is chunked via a `sendCode` linked list. The fee is collected on `userInventoryCodeIn` itself; the trailing pointer bump is free.
 
 ---
 
@@ -145,7 +145,7 @@ Store JSON data in tables like a database.
 #### How are tables created?
 
 1. Call [`initializeDbRoot()`](#initializedbroot) once per `dbRootId`. Only the address that calls this becomes the **DbRoot creator** (the only one allowed to update permissions or schema).
-2. Call [`createTable()`](#createtable) (public) or [`createTable(..., isPrivate=true)`](#createtable) (private) to create a table. The `LINKED_LIST_FEE` (0.0003 ETH) is charged here.
+2. Call [`createTable()`](#createtable) (public) or [`createTable(..., isPrivate=true)`](#createtable) (private) to create a table. `tableCreationFee` (0.0003 ETH default on Sepolia) is charged here and split 31/69 between `feeReceiver` and the DbRoot's creator.
 3. Call [`writeRow()`](#writerow) to append rows.
 
 <Note>
@@ -286,12 +286,23 @@ Users can derive a deterministic X25519 keypair from their wallet signature usin
 
 ### Fees
 
-| Constant | Value | Charged when |
-|----------|-------|--------------|
-| `BASIC_FEE` | 0.0001 ETH | `updateUserTxChainTail` (every `codeIn()`) |
-| `LINKED_LIST_FEE` | 0.0003 ETH | `createTable`, `createPrivateTable`, `requestConnection`, `updateTableTxChainTail`, `updateConnectionTxChainTail` |
+Fees are owner-mutable per network and read from the contract by the SDK (`utils.getBasicFee` / `getLinkedListFee` / `getTableCreationFee`). The defaults shipped at deploy time are below.
 
-These fees are paid in addition to gas. `writeRow()` and `writeConnectionRow()` each fire two transactions internally (data write + pointer update), and the pointer update is what charges `LINKED_LIST_FEE`.
+| Fee | Default (Sepolia) | Charged on |
+|-----|-------------------|------------|
+| `basicFee` | 0.0001 ETH | `dbCodeIn` / `walletConnectionCodeIn` / `userInventoryCodeIn` **when the payload is inline** (≤ 700 bytes, no `sendCode` chain) |
+| `linkedListFee` | 0.0003 ETH | same three functions, but **when the payload is chunked** via a `sendCode` linked list |
+| `tableCreationFee` | 0.0003 ETH | `createTable` / `createPrivateTable` |
+| `discountFee` | 0.00005 ETH | replaces `basicFee` on the inline path when the signer holds the configured IQ token |
+
+**Where the value goes:**
+
+- For `dbCodeIn` / `walletConnectionCodeIn` / `userInventoryCodeIn`: 100% to `feeReceiver`.
+- For `createTable`: split **31% to `feeReceiver`** / **69% to the DbRoot's `creator`**. Root creators can pin their own value (including 0) via `setRootTableCreationFee` — see below.
+
+**What does *not* cost anything:** `updateTableTxChainTail`, `updateConnectionTxChainTail`, `updateUserTxChainTail`, `requestConnection`, `manageConnection`, `dbInstructionCodeIn`. These are nonpayable in the current contract.
+
+`writeRow()` and `writeConnectionRow()` still fire two transactions internally (the code-in + the pointer update), but **the pointer update is now free** — the fee is collected upstream on the code-in itself, exactly once per write.
 
 ---
 
@@ -323,8 +334,8 @@ const txHash2 = await iqlabs.writer.codeIn(
 
 Internally, this fires:
 1. (For large data) a series of `sendCode()` calls forming the linked list
-2. `userInventoryCodeIn(handle, tailTx, filetype, "0", beforeUserTx)`
-3. `updateUserTxChainTail(myTxHash)`: charges `BASIC_FEE` (0.0001 ETH)
+2. `userInventoryCodeIn(handle, tailTx, ...)`: **charges the fee here** — `basicFee` if `tailTx === ""` (inline payload), otherwise `linkedListFee`
+3. `updateUserTxChainTail(myTxHash)`: free pointer bump
 
 ---
 
@@ -367,7 +378,7 @@ await iqlabs.writer.requestConnection(
 );
 ```
 
-The connection seed is computed automatically from `(senderAddress, receiverAddress)` via [`deriveDmSeed()`](#derivedmseed). `LINKED_LIST_FEE` is charged here.
+The connection seed is computed automatically from `(senderAddress, receiverAddress)` via [`deriveDmSeed()`](#derivedmseed). `requestConnection` is **free** in this version.
 
 ---
 
@@ -431,7 +442,7 @@ await iqlabs.writer.writeConnectionRow(
 );
 ```
 
-The connection seed is derived automatically from the sender (`signer.getAddress()`) and `otherParty`. Internally fires `walletConnectionCodeIn` then `updateConnectionTxChainTail` (`LINKED_LIST_FEE`).
+The connection seed is derived automatically from the sender (`signer.getAddress()`) and `otherParty`. Internally fires `walletConnectionCodeIn` (charges `basicFee` for inline payload, `linkedListFee` when chunked) then `updateConnectionTxChainTail` (free pointer bump).
 
 ---
 
@@ -519,7 +530,7 @@ Pass empty arrays to make creation open to anyone.
 
 #### `createTable()`
 
-Create a new table. Charges `LINKED_LIST_FEE` (0.0003 ETH).
+Create a new table. Charges `tableCreationFee` (0.0003 ETH default on Sepolia, or whatever the DbRoot creator pinned via [`setRootTableCreationFee()`](#setroottablecreationfee)). The fee is split 31% to `feeReceiver` and 69% to `DbRoot.creator`.
 
 | **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`columns`: column names (string[])<br/>`idCol`: ID column (string)<br/>`extKeys`: extension keys (string[], default: `[]`)<br/>`gate`: optional access gate, see [Token & Collection Gating](#token--collection-gating)<br/>`writers`: optional writer whitelist (`string[]`, default: `[]`)<br/>`isPrivate`: create private table (boolean, default: `false`) |
 |----------------|--------------------------|
@@ -586,7 +597,7 @@ await iqlabs.writer.updateTable(
 
 #### `writeRow()`
 
-Append a row to an existing table. Charges `LINKED_LIST_FEE` (0.0003 ETH) for the pointer update.
+Append a row to an existing table. Charges `basicFee` (0.0001 ETH) when the row fits inline, or `linkedListFee` (0.0003 ETH) when it has to be chunked through `sendCode`.
 
 | **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`rowJson`: JSON row data (string)<br/>`onProgress`: optional progress callback `(percent: number) => void` |
 |----------------|--------------------------|
@@ -602,7 +613,7 @@ await iqlabs.writer.writeRow(signer, 'my-db', 'users', JSON.stringify({
 The table must already exist. There is no implicit creation. `writeRow` reads `txChainTail` for staleness check and reverts if the table was never created.
 </Warning>
 
-This call fires two transactions: `dbCodeIn` (write) and `updateTableTxChainTail` (pointer + fee). The SDK awaits both before returning.
+This call fires two transactions: `dbCodeIn` (write — **fee charged here**, based on payload size) and `updateTableTxChainTail` (free pointer update). The SDK awaits both before returning.
 
 ---
 
@@ -623,21 +634,102 @@ rows.forEach(r => console.log(r.txHash, r.data));
 
 #### `getTablelistFromRoot()`
 
-Returns both the public and global table lists for a DbRoot.
+Returns the public and global table lists for a DbRoot, plus the root's `tableCreationFee` override state.
 
 | **Parameters** | `dbRootId`: database ID (string) |
 |----------------|--------------------------|
-| **Returns** | `{ creator: string, tables: TableEntry[], globalTables: TableEntry[] }` where `TableEntry = { name: string, seedHex: string }` |
+| **Returns** | `{ creator: string, tables: TableEntry[], globalTables: TableEntry[], tableCreationFeeOverride: bigint, tableCreationFeeIsSet: boolean }` where `TableEntry = { name: string, seedHex: string }` |
 
 ```typescript
-const { creator, tables, globalTables } = await iqlabs.reader.getTablelistFromRoot('my-db');
+const root = await iqlabs.reader.getTablelistFromRoot('my-db');
 
-console.log('Creator:', creator);
-tables.forEach(t => console.log(`public: ${t.name} (${t.seedHex})`));
-globalTables.forEach(t => console.log(`all:    ${t.name} (${t.seedHex})`));
+console.log('Creator:', root.creator);
+root.tables.forEach(t => console.log(`public: ${t.name} (${t.seedHex})`));
+root.globalTables.forEach(t => console.log(`all:    ${t.name} (${t.seedHex})`));
+
+// Per-root tableCreationFee override. If `tableCreationFeeIsSet` is false,
+// the contract uses the global default and the IQ owner can change it at
+// any time. If true, the root creator has pinned the value (including 0).
+if (root.tableCreationFeeIsSet) {
+  console.log(`Root-pinned fee: ${root.tableCreationFeeOverride} wei`);
+} else {
+  console.log('Using global tableCreationFee (subject to IQ owner changes)');
+}
 ```
 
 `tables` only contains public tables (created with `isPrivate=false`). `globalTables` contains every table ever created under this root, public or private.
+
+---
+
+#### `setTableCreationFee()`
+
+IQ-protocol owner only. Updates the contract-wide default `tableCreationFee`. DbRoots that haven't pinned their own value will see the new amount on the next `createTable` call.
+
+| **Parameters** | `signer`: `ethers.Signer` (must be the contract owner)<br/>`newFee`: new fee in wei (`bigint`) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import { ethers } from 'ethers';
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+// Set default to 0.0005 ETH
+await iqlabs.writer.setTableCreationFee(signer, ethers.parseEther('0.0005'));
+```
+
+---
+
+#### `setRootTableCreationFee()`
+
+DbRoot creator only. Pins this root's `tableCreationFee` to a specific value (including `0n`) so it ignores future changes to the global default. Lasts until [`clearRootTableCreationFee()`](#clearroottablecreationfee).
+
+| **Parameters** | `signer`: `ethers.Signer` (must be `DbRoot.creator`)<br/>`dbRootId`: database ID (string)<br/>`newFee`: pinned fee in wei (`bigint`) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+// Root creator pins their app's room creation at 0.001 ETH and locks it in
+await iqlabs.writer.setRootTableCreationFee(
+  signer,
+  'my-db',
+  ethers.parseEther('0.001'),
+);
+
+// Or make rooms permanently free under this root, even if IQ raises the default
+await iqlabs.writer.setRootTableCreationFee(signer, 'my-db', 0n);
+```
+
+Per-write split is still 31% `feeReceiver` / 69% `DbRoot.creator`, so a 0-fee root simply collects nothing.
+
+---
+
+#### `clearRootTableCreationFee()`
+
+DbRoot creator only. Removes the per-root pin, letting the global default apply again.
+
+| **Parameters** | `signer`: `ethers.Signer` (must be `DbRoot.creator`)<br/>`dbRootId`: database ID (string) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+await iqlabs.writer.clearRootTableCreationFee(signer, 'my-db');
+```
+
+---
+
+#### `transferDbRootCreator()`
+
+Current `DbRoot.creator` only. Hands ownership of the root — and its 69% share of future `tableCreationFee` collections — to a new address. Mirrors solana `transfer_db_root_creator`.
+
+| **Parameters** | `signer`: `ethers.Signer` (must be current `DbRoot.creator`)<br/>`dbRootId`: database ID (string)<br/>`newCreator`: address receiving the role (non-zero) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+await iqlabs.writer.transferDbRootCreator(signer, 'my-db', '0xNewOwner...');
+```
+
+After the transfer the previous creator can no longer call `manageTableCreators`, `setRootTableCreationFee`, etc. — the new address has full root authority.
 
 ---
 
@@ -889,7 +981,7 @@ await iqlabs.writer.manageRowData(
 );
 ```
 
-Internally fires `dbInstructionCodeIn` + `updateTableTxChainTail`. The contract also stamps `instructionTableTimestamps[dbRootId][tableSeed]` with the current block timestamp.
+Internally fires `dbInstructionCodeIn` + `updateTableTxChainTail` — both free. The contract also stamps `instructionTableTimestamps[dbRootId][tableSeed]` with the current block timestamp. Edits and deletes are gas-only.
 
 ---
 
@@ -962,6 +1054,31 @@ import iqlabs from '@iqlabs-official/ethereum-sdk';
 const seed1 = iqlabs.utils.deriveDmSeed(walletA, walletB);
 const seed2 = iqlabs.utils.deriveDmSeed(walletB, walletA);
 // seed1 === seed2 (order doesn't matter)
+```
+
+---
+
+#### Fee getters
+
+Read the live fee values straight from the contract. Cached per contract address with a 10-minute TTL; call `clearFeeCache()` to force a re-read (e.g. right after the owner ran `setFees`).
+
+| Function | Returns |
+|----------|---------|
+| `iqlabs.utils.getBasicFee(signerOrProvider)` | `bigint` — fee for inline code-in writes |
+| `iqlabs.utils.getLinkedListFee(signerOrProvider)` | `bigint` — fee for chunked code-in writes |
+| `iqlabs.utils.getTableCreationFee(signerOrProvider)` | `bigint` — contract-wide `tableCreationFee` default |
+| `iqlabs.utils.resolveCodeInFee(signerOrProvider, onChainPath)` | `bigint` — mirrors the contract's branch: `""` → basicFee, else linkedListFee |
+| `iqlabs.utils.getEffectiveTableCreationFee(signerOrProvider, dbRootId)` | `bigint` — root override if pinned, else global default |
+| `iqlabs.utils.clearFeeCache()` | `void` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+// "Will this write cost me anything I should warn the user about?"
+const myFee = await iqlabs.utils.resolveCodeInFee(signer, '' /* inline */);
+
+// "How much will this app's room creation cost a user?"
+const roomFee = await iqlabs.utils.getEffectiveTableCreationFee(provider, 'my-db');
 ```
 
 ---

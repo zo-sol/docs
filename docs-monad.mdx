@@ -60,7 +60,7 @@ You need testnet MON to pay fees. Grab some from the official faucet:
 3. Request testnet MON arrives in seconds
 
 <Note>
-The faucet hands out a modest amount per request (about **20 MON** at a time, with roughly **25 MON** extra if you connect a social account). Since fees mirror mainnet (`BASIC_FEE` 6.5 MON, `LINKED_LIST_FEE` 19.5 MON), claim a couple of times if you plan to run many writes.
+The faucet hands out a modest amount per request (about **20 MON** at a time, with roughly **25 MON** extra if you connect a social account). Testnet fees are 1/10 of mainnet (`basicFee` 0.65 MON, `linkedListFee` 1.95 MON, `tableCreationFee` 1.95 MON), so one faucet claim is enough for plenty of writes.
 </Note>
 
 <Warning>
@@ -185,7 +185,7 @@ Each address has an on-chain record managed by the contract. No separate account
 
 #### When is it created?
 
-No explicit "create user" step. The first [`codeIn()`](#codein) call writes both the inventory entry and advances the chain tail. Each tx-chain write costs a small `BASIC_FEE` (6.5 MON).
+No explicit "create user" step. The first [`codeIn()`](#codein) call writes both the inventory entry and advances the chain tail. Each `codeIn()` charges `basicFee` (6.5 MON mainnet / 0.65 MON testnet) for an inline payload, or `linkedListFee` (19.5 / 1.95 MON) when the data is chunked.
 
 ---
 
@@ -222,7 +222,7 @@ Store JSON data in tables like a database, all on-chain.
 #### How are tables created?
 
 1. Call [`initializeDbRoot()`](#initializedbroot) once per `dbRootId`. The caller becomes the **DbRoot creator**.
-2. Call [`createTable()`](#createtable) to create a table. `LINKED_LIST_FEE` (19.5 MON) is charged here.
+2. Call [`createTable()`](#createtable) to create a table. `tableCreationFee` (19.5 MON mainnet / 1.95 MON testnet) is charged here and split 31/69 between `feeReceiver` and the DbRoot's creator.
 3. Call [`writeRow()`](#writerow) to append rows.
 
 <Note>
@@ -288,12 +288,23 @@ Users derive a deterministic X25519 keypair from their wallet signature. The wal
 
 ### Fees
 
-| Constant | Value | Charged when |
-|----------|-------|--------------|
-| `BASIC_FEE` | 6.5 MON | Every `codeIn()` |
-| `LINKED_LIST_FEE` | 19.5 MON | `createTable`, `requestConnection`, `writeRow`, `writeConnectionRow` |
+Fees are owner-mutable per network and read live from the contract (`utils.getBasicFee` / `getLinkedListFee` / `getTableCreationFee`). Defaults shipped at deploy time:
 
-Monad is fast and cheap, so these fees are tiny.
+| Fee | Mainnet default | Testnet default | Charged on |
+|-----|-----------------|-----------------|------------|
+| `basicFee` | 6.5 MON | 0.65 MON | `dbCodeIn` / `walletConnectionCodeIn` / `userInventoryCodeIn` **when the payload is inline** (≤ 700 bytes) |
+| `linkedListFee` | 19.5 MON | 1.95 MON | the same three functions, **when the payload is chunked** via `sendCode` |
+| `tableCreationFee` | 19.5 MON | 1.95 MON | `createTable` / `createPrivateTable` |
+| `discountFee` | 3.25 MON | 0.325 MON | replaces `basicFee` on the inline path for IQ-token holders |
+
+Testnet fees are exactly 10× cheaper than mainnet because the official Monad faucet drips only 0.05 MON / 12h — full mainnet pricing would make even one round trip unreachable for devs.
+
+**Where the value goes:**
+
+- `dbCodeIn` / `walletConnectionCodeIn` / `userInventoryCodeIn`: 100% to `feeReceiver`.
+- `createTable`: split **31% to `feeReceiver`** / **69% to the DbRoot's `creator`**. Root creators can pin or zero out their own value via [`setRootTableCreationFee()`](#setroottablecreationfee).
+
+**Free:** `updateTableTxChainTail`, `updateConnectionTxChainTail`, `updateUserTxChainTail`, `requestConnection`, `manageConnection`, `dbInstructionCodeIn`. Pointer bumps and instruction edits don't cost fee, only gas.
 
 ---
 
@@ -368,7 +379,7 @@ await iqlabs.writer.requestConnection(
 );
 ```
 
-`LINKED_LIST_FEE` (19.5 MON) charged here.
+`requestConnection` is **free** in this version (gas only).
 
 ---
 
@@ -515,7 +526,7 @@ await iqlabs.writer.manageTableCreators(
 
 #### `createTable()`
 
-Create a new table. Charges `LINKED_LIST_FEE` (19.5 MON).
+Create a new table. Charges `tableCreationFee` (19.5 MON mainnet / 1.95 MON testnet by default — or whatever value the DbRoot creator pinned with `setRootTableCreationFee`). Split 31% to `feeReceiver`, 69% to `DbRoot.creator`.
 
 | **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`columns`: column names (string[])<br/>`idCol`: ID column (string)<br/>`extKeys`: extension keys (string[], default: `[]`)<br/>`gate`: optional access gate<br/>`writers`: optional writer whitelist (`string[]`, default: `[]`)<br/>`isPrivate`: create private table (boolean, default: `false`) |
 |----------------|--------------------------|
@@ -577,7 +588,7 @@ await iqlabs.writer.updateTable(
 
 #### `writeRow()`
 
-Append a row to an existing table. Charges `LINKED_LIST_FEE` (19.5 MON).
+Append a row to an existing table. Charges `basicFee` (6.5 / 0.65 MON) for inline payloads or `linkedListFee` (19.5 / 1.95 MON) when chunked.
 
 | **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`rowJson`: JSON row data (string)<br/>`onProgress`: optional progress callback `(percent: number) => void` |
 |----------------|--------------------------|
@@ -600,7 +611,7 @@ await iqlabs.writer.writeRow(signer, 'my-app', 'posts', JSON.stringify({
 Table must already exist. `writeRow` will revert if the table was never created.
 </Warning>
 
-Fires two transactions internally: `dbCodeIn` (data) + `updateTableTxChainTail` (pointer + fee).
+Fires two transactions internally: `dbCodeIn` (data — **fee charged here**, basic or linkedList by payload size) + `updateTableTxChainTail` (free pointer bump).
 
 ---
 
