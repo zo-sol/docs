@@ -23,6 +23,10 @@
         "pages": ["docs-typescript", "docs-python"]
       },
       {
+        "group": "On-Chain Git",
+        "pages": ["docs-iqgit"]
+      },
+      {
         "group": "Ethereum SDK",
         "pages": ["docs-ethereum"]
       },
