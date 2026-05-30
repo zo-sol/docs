@@ -309,20 +309,33 @@ object with `signTransaction` / `signAllTransactions`.
 
 ## How the pieces fit together
 
-```
-              ┌──────────────────────────┐
-              │   Solana inscriptions    │
-              │  (blobs + trees + rows)  │
-              └────────────┬─────────────┘
-                           │
-        ┌──────────────────┼────────────────────┐
-        │                  │                    │
-   ┌────▼─────┐      ┌─────▼──────┐       ┌─────▼──────┐
-   │  iq-git  │      │  git.iqlabs│       │  git-sdk   │
-   │   CLI    │      │   .dev     │       │   (npm)    │
-   └────┬─────┘      └─────┬──────┘       └─────┬──────┘
-        │                  │                    │
-     terminal           browser        agents / apps / dApps
+```mermaid
+flowchart TB
+  chain["Solana inscriptions<br/>(blobs + trees + commit rows)"]
+
+  cli["iq-git CLI"]
+  web["git.iqlabs.dev"]
+  sdk["git-sdk (npm)"]
+
+  term["terminal"]
+  browser["browser"]
+  agents["agents / apps / dApps"]
+
+  chain --- cli
+  chain --- web
+  chain --- sdk
+
+  cli --> term
+  web --> browser
+  sdk --> agents
+
+  classDef source fill:#0f1115,stroke:#00ff00,stroke-width:2px,color:#00ff00;
+  classDef surface fill:#0f1115,stroke:#00cc00,stroke-width:1.5px,color:#e6ffe6;
+  classDef sink fill:#0f1115,stroke:#444,stroke-width:1px,color:#bbb;
+
+  class chain source;
+  class cli,web,sdk surface;
+  class term,browser,agents sink;
 ```
 
 All three speak the **same on-chain format**. A commit you push from
