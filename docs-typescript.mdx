@@ -802,6 +802,42 @@ sessions.forEach(pda => {
 
 ### Utility Functions
 
+#### Session speed profiles
+
+Many writer/reader functions accept a `speed` parameter that controls RPS
+and concurrency for the call. The SDK ships four presets and lets you
+override raw values directly:
+
+```typescript
+import iqlabs from '@iqlabs-official/solana-sdk';
+
+// Preset name
+await iqlabs.writer.writeRow(connection, signer, dbRootId, tableSeed, rowJson, {
+  speed: 'heavy',
+});
+
+// Raw override — any subset works; missing dials inherit the default preset
+await iqlabs.writer.writeRow(connection, signer, dbRootId, tableSeed, rowJson, {
+  speed: { maxRps: 80, maxConcurrencyUpload: 30 },
+});
+```
+
+| Preset | `maxRps` | `maxConcurrency` | `maxConcurrencyUpload` |
+|---|---|---|---|
+| `light` (default) | 2 | 5 | 1 |
+| `medium` | 50 | 50 | 5 |
+| `heavy` | 100 | 100 | 50 |
+| `extreme` | 250 | 250 | 100 |
+
+Profiles are mutable — `iqlabs.utils.SESSION_SPEED_PROFILES.heavy.maxRps = 200`
+will affect every future `speed: 'heavy'` call.
+
+Exports: `SESSION_SPEED_PROFILES`, `DEFAULT_SESSION_SPEED`,
+`resolveSessionSpeed`, `resolveSessionConfig`, types `SessionSpeedKey`,
+`SessionSpeedConfig`, `SessionSpeedOption`.
+
+---
+
 #### `deriveDmSeed()`
 
 Derives a deterministic seed for direct messaging (DM) between two users. Sorts the two pubkeys alphabetically and hashes with keccak256.

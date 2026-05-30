@@ -113,6 +113,25 @@ If the push dies partway (network blip, RPC error, Ctrl-C), the next
 `iqgit push` resumes from the last checkpoint. Already-uploaded blobs
 are reused from cache instead of being re-inscribed.
 
+### Upload speed
+
+Default speed is `light` — the Helius free-tier friendly setting. On a
+paid RPC, dial it up by preset or by raw RPS / concurrency:
+
+```bash
+# preset name
+iqgit config speed heavy                # save as global default
+iqgit push --speed extreme              # one-off override
+
+# raw dials (win over the preset; any subset works)
+iqgit config rps 80                     # global default maxRps
+iqgit push --rps 120 --concurrency-upload 30
+```
+
+Available presets: `light` | `medium` | `heavy` | `extreme`. Raw flags:
+`--rps`, `--concurrency`, `--concurrency-upload` (and matching `iqgit
+config` keys: `rps`, `concurrency`, `concurrencyUpload`).
+
 ### Gateway routing
 
 Read-heavy commands (`log`, `registry`, `clone`, `status`) route through
@@ -295,6 +314,35 @@ that hashes content (`commit`, `status`, etc.).
 `SignerInput` from `@iqlabs-official/solana-sdk` is accepted everywhere
 a signer is needed: a `Keypair`, a web3.js `Signer`, or a wallet adapter
 object with `signTransaction` / `signAllTransactions`.
+
+### Tuning upload speed
+
+Blob and tree uploads forward to `iqlabs.writer.codeIn`, which sets RPS
+and concurrency from a `SESSION_SPEED_PROFILES` preset. The git-sdk
+default is `"light"` (Helius free-tier friendly). You can either pick a
+preset or pass raw dials directly:
+
+```ts
+// 1. Pick a preset name.
+const client = new GitClient({ connection, signer, speed: "heavy" });
+
+// 2. Or override raw RPS / concurrency. Missing keys fall back to the
+//    default preset values.
+const client = new GitClient({
+  connection,
+  signer,
+  speed: { maxRps: 80, maxConcurrencyUpload: 30 },
+});
+
+// Per-call override (wins over the client-level default):
+await client.commit("my-repo", "tweak", scan, { speed: "extreme" });
+await client.commit("my-repo", "tweak", scan, {
+  speed: { maxRps: 120, maxConcurrencyUpload: 40 },
+});
+```
+
+Available presets: `light` | `medium` | `heavy` | `extreme`. Raw object
+accepts `maxRps`, `maxConcurrency`, `maxConcurrencyUpload`.
 
 ### Use cases
 
