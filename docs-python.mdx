@@ -744,6 +744,42 @@ connection_pda = contract.get_connection_table_pda(db_root_pda, connection_seed,
 
 ### Utility Functions
 
+#### Session speed profiles
+
+Many writer/reader functions accept a `speed` parameter that controls RPS
+and concurrency for the call. The SDK ships four presets and lets you
+override raw values directly:
+
+```python
+import iqlabs
+
+# Preset name
+await iqlabs.writer.write_row(connection, signer, db_root_id, table_seed, row_json, speed="heavy")
+
+# Raw override — any subset of keys; missing dials inherit the default preset.
+await iqlabs.writer.write_row(
+    connection, signer, db_root_id, table_seed, row_json,
+    speed={"max_rps": 80, "max_concurrency_upload": 30},
+)
+```
+
+| Preset | `max_rps` | `max_concurrency` | `max_concurrency_upload` |
+|---|---|---|---|
+| `light` (default) | 2 | 5 | 1 |
+| `medium` | 50 | 50 | 5 |
+| `heavy` | 100 | 100 | 50 |
+| `extreme` | 250 | 250 | 100 |
+
+Profiles are mutable —
+`iqlabs.utils.SESSION_SPEED_PROFILES["heavy"]["max_rps"] = 200` affects
+every future `speed="heavy"` call.
+
+Exports: `SESSION_SPEED_PROFILES`, `DEFAULT_SESSION_SPEED`,
+`resolve_session_speed`, `resolve_session_config`, type
+`SessionSpeedOption`.
+
+---
+
 #### `derive_dm_seed()`
 
 Derives a deterministic seed for direct messaging (DM) between two users. Sorts the two pubkeys alphabetically and hashes `"lower:upper"` with Keccak-256.
