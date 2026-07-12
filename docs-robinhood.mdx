@@ -1,0 +1,867 @@
+---
+title: "Robinhood Chain SDK"
+description: "Complete guide to building on-chain apps on Robinhood Chain with the IQLabs Ethereum SDK"
+---
+
+<Note>
+This document is in progress and will be refined.
+</Note>
+
+<video
+  autoPlay
+  muted
+  loop
+  playsInline
+  className="w-full rounded-xl"
+  src="/images/qrobin.mp4"
+></video>
+
+<Warning>
+**Robinhood Chain mainnet** is live and supported. Switch with [`setNetwork('robinhood')`](#setnetwork). Requires SDK **v0.3.0 or later**. The Robinhood Chain testnet contract is not deployed yet.
+</Warning>
+
+The IQLabs Ethereum SDK works on Robinhood Chain out of the box. Same API, one line to switch networks. Store data on-chain, build databases, send encrypted DMs, gate content by token ownership. Robinhood Chain is an Ethereum-compatible Layer 2 with ETH as the gas token, so fees stay a fraction of a cent while everything behaves exactly like Ethereum.
+
+## Installation
+
+```bash
+npm i @iqlabs-official/ethereum-sdk
+```
+
+The SDK ships as CommonJS for Node.js and works in browsers via any modern bundler.
+
+---
+
+## Network
+
+The SDK ships with four network modes. Set the one you want once at app startup with [`setNetwork()`](#setnetwork).
+
+| Mode | Chain ID | Currency | Contract | Default RPC |
+|------|---------:|----------|----------|-------------|
+| `sepolia` | 11155111 | ETH | [`0xB1C16271954c7238672c3666FD22Ee14C6d065Db`](https://sepolia.etherscan.io/address/0xB1C16271954c7238672c3666FD22Ee14C6d065Db) | `https://rpc.sepolia.org` |
+| `monad`   | 143      | MON | [`0xeFd9376835076Bf8d83826F6A2277BB5362Cd893`](https://monadvision.com/address/0xeFd9376835076Bf8d83826F6A2277BB5362Cd893) | `https://rpc.monad.xyz` |
+| `robinhood` | 4663   | ETH | [`0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223`](https://robinhoodchain.blockscout.com/address/0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223) | `https://rpc.mainnet.chain.robinhood.com` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood'); // call once at app startup
+```
+
+<Note>
+The contract is identical across all networks (same ABI, same functions). Only the address, chain, and fees differ. The SDK reads fees on-chain, so you never hardcode them. The Robinhood deployment is [verified on Blockscout](https://robinhoodchain.blockscout.com/address/0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223#code).
+</Note>
+
+---
+
+## Getting ETH on Robinhood Chain
+
+Robinhood Chain uses **ETH** for gas and fees. Bridge ETH (or supported ERC-20s) in via the canonical Arbitrum bridge or partner bridging routes — see the [official Robinhood Chain docs](https://docs.robinhood.com/chain/) for current options.
+
+<Note>
+Fees are tiny: a basic write costs `0.00012 ETH` (about $0.22). Bridging a few dollars of ETH is enough for many writes.
+</Note>
+
+<Warning>
+Robinhood Chain is chain ID `4663`. It is a separate network from Ethereum mainnet and Arbitrum One — ETH must be bridged in before it can be spent there.
+</Warning>
+
+---
+
+## Wallet / Signer Setup
+
+Every writer function takes an `ethers.Signer`. Two ways to get one:
+
+### Node.js (private key)
+
+```typescript
+import { Wallet, JsonRpcProvider } from 'ethers';
+
+const provider = new JsonRpcProvider('https://rpc.mainnet.chain.robinhood.com');
+const signer = new Wallet(process.env.PRIVATE_KEY!, provider);
+```
+
+### Browser (MetaMask / injected wallet)
+
+Add Robinhood Chain to MetaMask first:
+
+| Field | Value |
+|-------|-------|
+| Network Name | Robinhood Chain |
+| RPC URL | `https://rpc.mainnet.chain.robinhood.com` |
+| Chain ID | `4663` |
+| Currency Symbol | `ETH` |
+| Block Explorer | `https://robinhoodchain.blockscout.com` |
+
+Then connect:
+
+```typescript
+import { BrowserProvider } from 'ethers';
+
+const provider = new BrowserProvider(window.ethereum);
+await provider.send('eth_requestAccounts', []);
+const signer = await provider.getSigner();
+```
+
+Reader functions don't need a signer they use the RPC configured via [`setRpcUrl()`](#setrpcurl).
+
+<Note>
+Use [`assertChainMatches(signer)`](#assertchainmatches) after `setNetwork('robinhood')` to catch a signer that's still pointed at the wrong chain before you send a transaction.
+</Note>
+
+---
+
+## Core Concepts
+
+---
+
+### Data Storage (Code In)
+
+Store any data (files, text, JSON) directly on-chain. Data lives in transaction calldata, not on a centralized server. Reads reconstruct data by walking a linked list of transactions.
+
+#### How is it stored?
+
+Depending on data size, the SDK picks the optimal method:
+
+- **Inline (small)**: data fits in a single transaction's metadata field, no chunking
+- **Linked list (large)**: data is split into chunks, uploaded via `sendCode()` calls in batches up to ~96 KB each, and the tail tx hash is recorded
+
+#### Key related functions
+
+- [`codeIn()`](#codein): upload data and get a transaction hash
+- [`readCodeIn()`](#readcodein): read data back from a transaction hash
+
+---
+
+### User State
+
+Each address has an on-chain record managed by the contract. No separate account to initialize.
+
+#### What gets stored?
+
+- User-set metadata (name, profile, bio, anything you serialize)
+- `userTxChainTail`: the most recent inventory write, used as the head of the user's tx-chain
+
+#### When is it created?
+
+No explicit "create user" step. The first [`codeIn()`](#codein) call writes both the inventory entry and advances the chain tail. Each `codeIn()` charges `basicFee` (0.00012 ETH) for an inline payload, or `linkedListFee` (0.00036 ETH) when the data is chunked.
+
+---
+
+### Connection State
+
+An on-chain relationship between two addresses (friends, DM channels, etc.).
+
+#### What states can it have?
+
+- **pending** (`0`): request sent but not accepted yet
+- **approved** (`1`): request accepted, users are connected
+- **blocked** (`2`): one side blocked the other
+
+<Warning>
+A blocked connection can only be unblocked by the blocker.
+</Warning>
+
+The connection seed is derived deterministically from the two addresses via [`deriveDmSeed(userA, userB)`](#derivedmseed), so either party can recompute it.
+
+#### Key related functions
+
+- [`requestConnection()`](#requestconnection): send a friend request
+- [`manageConnection()`](#manageconnection): approve/block/unblock
+- [`readConnection()`](#readconnection): check relationship status
+- [`writeConnectionRow()`](#writeconnectionrow): exchange messages/data with a connected party
+- [`fetchUserConnections()`](#fetchuserconnections): fetch all of a user's connections
+
+---
+
+### Database Tables
+
+Store JSON data in tables like a database, all on-chain.
+
+#### How are tables created?
+
+1. Call [`initializeDbRoot()`](#initializedbroot) once per `dbRootId`. The caller becomes the **DbRoot creator**.
+2. Call [`createTable()`](#createtable) to create a table. `tableCreationFee` (0.00036 ETH) is charged here and split 31/69 between `feeReceiver` and the DbRoot's creator.
+3. Call [`writeRow()`](#writerow) to append rows.
+
+<Note>
+A table is uniquely identified by `dbRootId` + `tableName`. Both are hashed with `keccak256` internally, but raw names are also stored on-chain so the SDK can list them without a hardcoded lookup.
+</Note>
+
+Tables must exist before `writeRow()` is called. There is no implicit creation.
+
+#### Key related functions
+
+- [`initializeDbRoot()`](#initializedbroot): claim a `dbRootId`
+- [`createTable()`](#createtable) / [`updateTable()`](#updatetable): create or modify a table
+- [`writeRow()`](#writerow): append a row
+- [`readTableRows()`](#readtablerows): read rows from a table
+- [`getTablelistFromRoot()`](#gettablelistfromroot): list all tables in a database
+
+---
+
+### Token & Collection Gating
+
+Tables can be gated so only users holding a specific ERC-20 token or ERC-721 NFT can write data.
+
+#### Gate Types
+
+| Type | `gateType` | Description |
+|------|-----------|-------------|
+| **Token** (ERC-20) | `0` | User must hold >= `amount` of the specified token |
+| **Collection** (ERC-721) | `1` | User must hold any NFT from the specified collection |
+
+<Warning>
+ERC-20 `amount` is in **raw token units (wei-style)**. For an 18-decimal token, "100 tokens" = `parseEther("100")`, not `100`.
+</Warning>
+
+<Warning>
+**ERC-1155 is not supported.**
+</Warning>
+
+#### Gate parameter
+
+```typescript
+gate?: {
+  tokenAddress: string;  // ERC-20 or ERC-721 contract (ZeroAddress = public)
+  amount: number | bigint; // min balance (raw units, ERC-20 only; ignored for ERC-721)
+  gateType: 0 | 1;       // 0 = ERC-20, 1 = ERC-721
+}
+```
+
+---
+
+### Encryption (Crypto)
+
+Built-in encryption module (`iqlabs.crypto`) for encrypting data before storing on-chain. Primitives are identical to the Solana SDK, so the same plaintext flows across chains.
+
+#### Three encryption modes
+
+- **DH Encryption** (single recipient): Ephemeral X25519 ECDH → HKDF-SHA256 → AES-256-GCM
+- **Password Encryption**: PBKDF2-SHA256 (250k iterations) → AES-256-GCM
+- **Multi-recipient Encryption**: PGP-style hybrid, one CEK wrapped per recipient via ECDH
+
+Users derive a deterministic X25519 keypair from their wallet signature. The wallet *is* the key, no separate keystore.
+
+---
+
+### Fees
+
+Fees are owner-mutable per network and read live from the contract (`utils.getBasicFee` / `getLinkedListFee` / `getTableCreationFee`). Defaults shipped at deploy time:
+
+| Fee | Default | ~USD | Charged on |
+|-----|---------|------|------------|
+| `basicFee` | 0.00012 ETH | ~$0.22 | `dbCodeIn` / `walletConnectionCodeIn` / `userInventoryCodeIn` **when the payload is inline** (≤ 700 bytes) |
+| `linkedListFee` | 0.00036 ETH | ~$0.65 | the same three functions, **when the payload is chunked** via `sendCode` |
+| `tableCreationFee` | 0.00036 ETH | ~$0.65 | `createTable` / `createPrivateTable` |
+| `discountFee` | 0.00006 ETH | ~$0.11 | replaces `basicFee` on the inline path for IQ-token holders |
+
+Defaults target the same dollar values as Monad mainnet (priced at ETH ~$1,795, July 2026) and are retunable on-chain as price moves.
+
+**Where the value goes:**
+
+- `dbCodeIn` / `walletConnectionCodeIn` / `userInventoryCodeIn`: 100% to `feeReceiver`.
+- `createTable`: split **31% to `feeReceiver`** / **69% to the DbRoot's `creator`**. Root creators can pin or zero out their own value via [`setRootTableCreationFee()`](#setroottablecreationfee).
+
+**Free:** `updateTableTxChainTail`, `updateConnectionTxChainTail`, `updateUserTxChainTail`, `requestConnection`, `manageConnection`, `dbInstructionCodeIn`. Pointer bumps and instruction edits don't cost fee, only gas.
+
+---
+
+## Function Details
+
+### Data Storage and Retrieval
+
+#### `codeIn()`
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`data`: data to upload (string or string[])<br/>`filename`: optional filename (string, default: `""`)<br/>`filetype`: file type hint (string, default: `""`)<br/>`onProgress`: optional progress callback `(percent: number) => void` |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+// Store a short message
+const txHash = await iqlabs.writer.codeIn(signer, 'Hello Robinhood Chain!');
+
+// Store large data with progress tracking
+const txHash2 = await iqlabs.writer.codeIn(
+  signer,
+  longString,
+  'data.txt',
+  'text/plain',
+  (pct) => console.log(`upload: ${pct.toFixed(1)}%`)
+);
+```
+
+---
+
+#### `readCodeIn()`
+
+| **Parameters** | `txHash`: transaction hash (string)<br/>`onProgress`: optional progress callback `(percent: number) => void` |
+|----------------|--------------------------|
+| **Returns** | `{ metadata: { handle, typeField, offset, beforeUserTx }, data: string }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+const result = await iqlabs.reader.readCodeIn(txHash);
+console.log(result.data);               // 'Hello Robinhood Chain!'
+console.log(result.metadata.typeField); // 'text/plain'
+```
+
+---
+
+### Connection Management
+
+#### `requestConnection()`
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`receiver`: counterparty address (string)<br/>`tableName`: connection table name (string)<br/>`columns`: column list (string[])<br/>`idCol`: ID column (string)<br/>`extKeys`: extension keys (string[], default: `[]`) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+await iqlabs.writer.requestConnection(
+  signer,
+  'my-app',
+  friendAddress,
+  'dm_table',
+  ['message', 'timestamp'],
+  'message_id'
+);
+```
+
+`requestConnection` is **free** in this version (gas only).
+
+---
+
+#### `manageConnection()`
+
+Approve, block, or unblock a connection.
+
+- `0`: pending
+- `1`: approved
+- `2`: blocked
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`otherParty`: counterparty address (string)<br/>`dbRootId`: database ID (string)<br/>`newStatus`: `0` \| `1` \| `2` |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+await iqlabs.writer.manageConnection(signer, friendAddress, 'my-app', 1); // approve
+await iqlabs.writer.manageConnection(signer, friendAddress, 'my-app', 2); // block
+```
+
+---
+
+#### `readConnection()`
+
+| **Parameters** | `dbRootId`: database ID (string)<br/>`partyA`: first wallet (string)<br/>`partyB`: second wallet (string) |
+|----------------|--------------------------|
+| **Returns** | `{ status: 'pending' \| 'approved' \| 'blocked' \| 'unknown', requester: 'a' \| 'b', blocker: 'a' \| 'b' \| 'none' }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+const { status } = await iqlabs.reader.readConnection('my-app', addressA, addressB);
+console.log(status); // 'pending' | 'approved' | 'blocked' | 'unknown'
+```
+
+---
+
+#### `writeConnectionRow()`
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`otherParty`: counterparty address (string)<br/>`dbRootId`: database ID (string)<br/>`rowJson`: JSON data (string)<br/>`onProgress`: optional progress callback `(percent: number) => void` |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+await iqlabs.writer.writeConnectionRow(
+  signer,
+  friendAddress,
+  'my-app',
+  JSON.stringify({ message_id: '1', message: 'gm from Robinhood Chain', timestamp: Date.now() })
+);
+```
+
+---
+
+#### `readConnectionRows()`
+
+| **Parameters** | `dbRootId`: database ID (string)<br/>`partyA`: first wallet (string)<br/>`partyB`: second wallet (string)<br/>`options`: `{ limit?: number }` (optional) |
+|----------------|--------------------------|
+| **Returns** | `Array<{ txHash: string, data: any }>` (most recent first) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+const messages = await iqlabs.reader.readConnectionRows(
+  'my-app', myAddress, friendAddress, { limit: 50 }
+);
+messages.forEach(m => console.log(m.data));
+```
+
+---
+
+#### `fetchUserConnections()`
+
+| **Parameters** | `userAddress`: user address (string) |
+|----------------|--------------------------|
+| **Returns** | `Array<{ connectionKey: string, partyA: string, partyB: string, status: 'pending' \| 'approved' \| 'blocked' \| 'unknown' }>` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+const connections = await iqlabs.reader.fetchUserConnections(myAddress);
+const friends = connections.filter(c => c.status === 'approved');
+```
+
+---
+
+### Table Management
+
+#### `initializeDbRoot()`
+
+Claim a `dbRootId`. Only the creator can later modify table-creator allowlists or schema.
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+await iqlabs.writer.initializeDbRoot(signer, 'my-app');
+// reverts if dbRootId already claimed
+```
+
+---
+
+#### `manageTableCreators()`
+
+Set who can create tables. **Caller must be the DbRoot creator.**
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableCreators`: addresses allowed to create public tables (`string[]`)<br/>`extCreators`: addresses allowed to create private tables (`string[]`) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+await iqlabs.writer.manageTableCreators(
+  signer, 'my-app',
+  [admin1, admin2], // public-table allowlist
+  []                // anyone can create private tables
+);
+// pass empty arrays to make creation open to anyone
+```
+
+---
+
+#### `createTable()`
+
+Create a new table. Charges `tableCreationFee` (0.00036 ETH by default — or whatever value the DbRoot creator pinned with `setRootTableCreationFee`). Split 31% to `feeReceiver`, 69% to `DbRoot.creator`.
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`columns`: column names (string[])<br/>`idCol`: ID column (string)<br/>`extKeys`: extension keys (string[], default: `[]`)<br/>`gate`: optional access gate<br/>`writers`: optional writer whitelist (`string[]`, default: `[]`)<br/>`isPrivate`: create private table (boolean, default: `false`) |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+import { parseEther } from 'ethers';
+
+iqlabs.setNetwork('robinhood');
+
+// Public table
+await iqlabs.writer.createTable(
+  signer, 'my-app', 'posts', ['title', 'body', 'author'], 'post_id'
+);
+
+// ERC-20 gated table (must hold >= 100 tokens)
+await iqlabs.writer.createTable(
+  signer, 'my-app', 'vip', ['name'], 'user_id', [],
+  { tokenAddress: erc20Address, amount: parseEther('100'), gateType: 0 }
+);
+
+// ERC-721 gated table (must hold 1 NFT)
+await iqlabs.writer.createTable(
+  signer, 'my-app', 'holders', ['name'], 'user_id', [],
+  { tokenAddress: nftAddress, amount: 0, gateType: 1 }
+);
+
+// Private table (must know the name to access)
+await iqlabs.writer.createTable(
+  signer, 'my-app', 'internal', ['note'], 'note_id', [],
+  undefined, [], true
+);
+```
+
+---
+
+#### `updateTable()`
+
+Modify an existing table's schema, gate, or writer list. **Caller must be the DbRoot creator.** Existing rows are preserved.
+
+| **Parameters** | Same as [`createTable()`](#createtable) minus `isPrivate` |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+import { parseEther } from 'ethers';
+
+iqlabs.setNetwork('robinhood');
+
+await iqlabs.writer.updateTable(
+  signer, 'my-app', 'vip', ['name'], 'user_id', [],
+  { tokenAddress: erc20Address, amount: parseEther('500'), gateType: 0 }
+);
+```
+
+---
+
+#### `writeRow()`
+
+Append a row to an existing table. Charges `basicFee` (0.00012 ETH) for inline payloads or `linkedListFee` (0.00036 ETH) when chunked.
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`rowJson`: JSON row data (string)<br/>`onProgress`: optional progress callback `(percent: number) => void` |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+await iqlabs.writer.writeRow(signer, 'my-app', 'posts', JSON.stringify({
+  post_id: '1',
+  title: 'gm Robinhood Chain',
+  body: 'first post on-chain',
+  author: await signer.getAddress()
+}));
+```
+
+<Warning>
+Table must already exist. `writeRow` will revert if the table was never created.
+</Warning>
+
+Fires two transactions internally: `dbCodeIn` (data — **fee charged here**, basic or linkedList by payload size) + `updateTableTxChainTail` (free pointer bump).
+
+---
+
+#### `readTableRows()`
+
+Walk the table's tx-chain and reconstruct rows.
+
+| **Parameters** | `dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`options`: `{ limit?: number }` (optional) |
+|----------------|--------------------------|
+| **Returns** | `Array<{ txHash: string, data: any }>` (most recent first) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+const rows = await iqlabs.reader.readTableRows('my-app', 'posts', { limit: 50 });
+rows.forEach(r => console.log(r.data));
+```
+
+---
+
+#### `getTablelistFromRoot()`
+
+| **Parameters** | `dbRootId`: database ID (string) |
+|----------------|--------------------------|
+| **Returns** | `{ creator: string, tables: TableEntry[], globalTables: TableEntry[] }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+const { creator, tables, globalTables } = await iqlabs.reader.getTablelistFromRoot('my-app');
+tables.forEach(t => console.log(`${t.name} (${t.seedHex})`));
+```
+
+`tables` = public only. `globalTables` = public + private.
+
+---
+
+#### `fetchInventoryTransactions()`
+
+Walk a user's inventory tx-chain (everything uploaded via [`codeIn()`](#codein)).
+
+| **Parameters** | `userAddress`: user address (string)<br/>`options`: `{ limit?: number }` (optional) |
+|----------------|--------------------------|
+| **Returns** | `Array<{ txHash: string, handle: string, tailTx: string, typeField: string, offset: string }>` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+const myFiles = await iqlabs.reader.fetchInventoryTransactions(myAddress, { limit: 20 });
+myFiles.forEach(tx => console.log(`${tx.txHash}: ${tx.handle}`));
+```
+
+---
+
+### Encryption
+
+#### `deriveX25519Keypair()`
+
+Derive a deterministic X25519 keypair from a wallet signature. Same wallet = same keypair every time.
+
+| **Parameters** | `signMessage`: `(msg: Uint8Array) => Promise<Uint8Array>` |
+|----------------|--------------------------|
+| **Returns** | `{ privKey: Uint8Array, pubKey: Uint8Array }` |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+import { getBytes } from 'ethers';
+
+const sign = async (msg: Uint8Array) => getBytes(await signer.signMessage(msg));
+const { privKey, pubKey } = await iqlabs.crypto.deriveX25519Keypair(sign);
+```
+
+---
+
+#### `dhEncrypt()` / `dhDecrypt()`
+
+Single-recipient encryption via X25519 ECDH.
+
+| `dhEncrypt` | `recipientPubHex`: hex string<br/>`plaintext`: Uint8Array → `{ senderPub, iv, ciphertext }` (all hex) |
+|-------------|---|
+| `dhDecrypt` | `privKey`: Uint8Array<br/>`senderPubHex`, `ivHex`, `ciphertextHex`: hex strings → `Uint8Array` |
+
+```typescript
+const enc = await iqlabs.crypto.dhEncrypt(
+  recipientPubHex,
+  new TextEncoder().encode('secret message')
+);
+
+const dec = await iqlabs.crypto.dhDecrypt(myPrivKey, enc.senderPub, enc.iv, enc.ciphertext);
+console.log(new TextDecoder().decode(dec));
+```
+
+---
+
+#### `passwordEncrypt()` / `passwordDecrypt()`
+
+Password-based encryption via PBKDF2-SHA256.
+
+```typescript
+const enc = await iqlabs.crypto.passwordEncrypt(
+  'my-password',
+  new TextEncoder().encode('secret data')
+);
+
+const dec = await iqlabs.crypto.passwordDecrypt('my-password', enc.salt, enc.iv, enc.ciphertext);
+```
+
+---
+
+#### `multiEncrypt()` / `multiDecrypt()`
+
+Multi-recipient PGP-style hybrid encryption.
+
+```typescript
+const enc = await iqlabs.crypto.multiEncrypt(
+  [alicePubHex, bobPubHex, carolPubHex],
+  new TextEncoder().encode('group secret')
+);
+
+// each recipient decrypts with their own key
+const plaintext = await iqlabs.crypto.multiDecrypt(alicePrivKey, alicePubHex, enc);
+```
+
+---
+
+### User Metadata
+
+#### `updateUserMetadata()`
+
+Store arbitrary metadata under the caller's address. Overwrites any previous value.
+
+| **Parameters** | `signer`: `ethers.Signer`<br/>`metadata`: `string \| Uint8Array` |
+|----------------|--------------------------|
+| **Returns** | Transaction hash (string) |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+await iqlabs.writer.updateUserMetadata(
+  signer,
+  JSON.stringify({ name: 'Alice', bio: 'building on Robinhood Chain' })
+);
+```
+
+---
+
+### Environment Settings
+
+#### `setNetwork()`
+
+Switch the active network mode. Call once at app startup.
+
+| **Parameters** | `mode`: `'sepolia' \| 'monad' \| 'monadTestnet' \| 'robinhood'`<br/>`rpcUrl`: optional override (string) |
+|----------------|--------------------------|
+| **Returns** | void |
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+
+iqlabs.setNetwork('robinhood');
+
+// with custom RPC (e.g. QuickNode)
+iqlabs.setNetwork('robinhood', 'https://your-robinhood-rpc');
+```
+
+#### `getNetwork()`
+
+| **Returns** | `'sepolia' \| 'monad' \| 'monadTestnet' \| 'robinhood'` |
+
+```typescript
+console.log(iqlabs.getNetwork()); // 'robinhood'
+```
+
+#### `assertChainMatches()`
+
+Throws if RPC chainId doesn't match active network mode.
+
+```typescript
+iqlabs.setNetwork('robinhood');
+await iqlabs.assertChainMatches(signer); // throws if signer's RPC isn't chainId 4663
+```
+
+#### `setRpcUrl()` / `getRpcUrl()`
+
+Override reader RPC without changing network mode.
+
+```typescript
+iqlabs.setRpcUrl('https://your-robinhood-rpc');
+console.log(iqlabs.getRpcUrl());
+```
+
+---
+
+## Tutorial: On-Chain Fortune Cookies 🥠
+
+Build a permanent on-chain fortune cookie machine on Robinhood Chain. Anyone can submit a fortune. Anyone can draw a random one. All fortunes live on-chain forever.
+
+**What this teaches:** `initializeDbRoot` → `createTable` → `writeRow` → `readTableRows`
+
+### Setup
+
+```bash
+npm i @iqlabs-official/ethereum-sdk ethers
+```
+
+### Full Code
+
+```typescript
+import iqlabs from '@iqlabs-official/ethereum-sdk';
+import { BrowserProvider } from 'ethers';
+
+const DB = 'fortune-cookies';
+const TABLE = 'fortunes';
+
+// Call once to initialize (only the first caller becomes creator)
+async function setupFortuneJar(signer: any) {
+  iqlabs.setNetwork('robinhood');
+  try {
+    await iqlabs.writer.initializeDbRoot(signer, DB);
+    await iqlabs.writer.createTable(
+      signer, DB, TABLE,
+      ['fortune', 'author', 'ts'],
+      'id'
+    );
+    console.log('Fortune jar created on Robinhood Chain!');
+  } catch (e) {
+    console.log('Jar already exists, skipping setup');
+  }
+}
+
+// Submit a fortune (costs 0.00036 ETH)
+async function submitFortune(signer: any, fortune: string) {
+  iqlabs.setNetwork('robinhood');
+  const author = await signer.getAddress();
+  const txHash = await iqlabs.writer.writeRow(
+    signer, DB, TABLE,
+    JSON.stringify({
+      id: `${author}-${Date.now()}`,
+      fortune,
+      author,
+      ts: Date.now()
+    })
+  );
+  console.log('Fortune inscribed:', txHash);
+  return txHash;
+}
+
+// Draw a random fortune (free read)
+async function drawFortune() {
+  iqlabs.setNetwork('robinhood');
+  const rows = await iqlabs.reader.readTableRows(DB, TABLE);
+  if (rows.length === 0) return 'The jar is empty. Be the first to add a fortune!';
+  const pick = rows[Math.floor(Math.random() * rows.length)];
+  return pick.data.fortune;
+}
+
+// Read all fortunes
+async function allFortunes() {
+  iqlabs.setNetwork('robinhood');
+  return iqlabs.reader.readTableRows(DB, TABLE);
+}
+
+// Usage in a browser app
+async function main() {
+  const provider = new BrowserProvider(window.ethereum);
+  await provider.send('eth_requestAccounts', []);
+  const signer = await provider.getSigner();
+
+  // First time only
+  await setupFortuneJar(signer);
+
+  // Submit
+  await submitFortune(signer, 'The best time to build on Robinhood Chain was yesterday. The second best time is now.');
+
+  // Draw
+  const fortune = await drawFortune();
+  console.log('Your fortune:', fortune);
+}
+```
+
+### How to extend
+
+- **NFT gate**: only holders of a specific collection can submit fortunes
+- **Encrypted fortunes**: use `passwordEncrypt` so only readers with the password see the message
+- **User profiles**: call `updateUserMetadata` so each author has a name + avatar
+- **Like counter**: use `manageRowData` to annotate fortunes with reactions

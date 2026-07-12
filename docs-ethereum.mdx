@@ -8,7 +8,7 @@ This document is in progress and will be refined.
 </Note>
 
 <Warning>
-**Sepolia testnet** (default) and **Monad mainnet** are supported. Ethereum mainnet is not deployed yet. Switch networks with [`setNetwork()`](#setnetwork). See [Network](#network).
+**Sepolia testnet** (default), **Monad mainnet**, and **Robinhood Chain mainnet** are supported. Ethereum mainnet is not deployed yet. Switch networks with [`setNetwork()`](#setnetwork). See [Network](#network).
 </Warning>
 
 The Ethereum port of the IQLabs SDK. Same primitives (on-chain data storage, IQDB tables, friend connections, and end-to-end encryption) built on `ethers v6` and a single deployed contract.
@@ -25,18 +25,21 @@ The SDK ships as CommonJS for Node.js and works in browsers via any modern bundl
 
 ## Network
 
-The SDK ships with two network modes. Default is `sepolia`. Switch with [`setNetwork()`](#setnetwork) typically once at app startup.
+The SDK ships with multiple network modes. Default is `sepolia`. Switch with [`setNetwork()`](#setnetwork) typically once at app startup.
 
 | Mode | Chain ID | Currency | Contract | Default RPC |
 |------|---------:|----------|----------|-------------|
 | `sepolia` | 11155111 | ETH | [`0xB1C16271954c7238672c3666FD22Ee14C6d065Db`](https://sepolia.etherscan.io/address/0xB1C16271954c7238672c3666FD22Ee14C6d065Db) | `https://rpc.sepolia.org` |
 | `monad`   | 143      | MON | [`0xeFd9376835076Bf8d83826F6A2277BB5362Cd893`](https://monadvision.com/address/0xeFd9376835076Bf8d83826F6A2277BB5362Cd893) | `https://rpc.monad.xyz` |
+| `robinhood` | 4663    | ETH | [`0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223`](https://robinhoodchain.blockscout.com/address/0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223) | `https://rpc.mainnet.chain.robinhood.com` |
 
 ```typescript
 import iqlabs from '@iqlabs-official/ethereum-sdk';
 
-iqlabs.setNetwork('monad'); // or 'sepolia' (default)
+iqlabs.setNetwork('monad'); // or 'robinhood', or 'sepolia' (default)
 ```
+
+See the [Robinhood Chain guide](/docs-robinhood) for chain-specific setup (`robinhood` requires SDK >= 0.3.0).
 
 Ethereum mainnet is not deployed yet.
 
@@ -887,7 +890,7 @@ The data is stored on-chain as raw `bytes` (UTF-8 encoded if you pass a string).
 
 Switch the active network mode. Reader functions immediately resolve to the new chain's contract and default RPC. Writers use the provider attached to your `Signer`, so you must also point that signer at a matching RPC. Call this once at app startup (or whenever the user toggles networks).
 
-| **Parameters** | `mode`: `'sepolia' \| 'monad'`<br />`rpcUrl`: optional override (string). Omitted → use the mode's default RPC. |
+| **Parameters** | `mode`: `'sepolia' \| 'monad' \| 'monadTestnet' \| 'robinhood'`<br />`rpcUrl`: optional override (string). Omitted → use the mode's default RPC. |
 |----------------|--------------------------|
 | **Returns** | void |
 
@@ -905,7 +908,7 @@ iqlabs.setNetwork('monad', 'https://your-monad-rpc');
 
 Returns the currently active network mode.
 
-| **Returns** | `'sepolia' \| 'monad'` |
+| **Returns** | `'sepolia' \| 'monad' \| 'monadTestnet' \| 'robinhood'` |
 
 ```typescript
 console.log(iqlabs.getNetwork()); // 'sepolia' (default)

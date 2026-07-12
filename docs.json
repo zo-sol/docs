@@ -33,6 +33,10 @@
       {
         "group": "Monad",
         "pages": ["docs-monad"]
+      },
+      {
+        "group": "Robinhood Chain",
+        "pages": ["docs-robinhood"]
       }
     ],
     "global": {
