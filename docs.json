@@ -23,6 +23,10 @@
         "pages": ["docs-typescript", "docs-python"]
       },
       {
+        "group": "Guides",
+        "pages": ["guides/fully-onchain-nft"]
+      },
+      {
         "group": "On-Chain Git",
         "pages": ["docs-iqgit"]
       },
