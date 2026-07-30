@@ -5,7 +5,7 @@ description: "Inscribe your artwork and metadata on Solana with Code In, and ser
 
 Most "on-chain" NFT collections are not actually on-chain. The mint lives on Solana, but the metadata JSON and the artwork usually live on IPFS pins, Arweave, or a plain web2 file host. If that hosting disappears, the NFT becomes a pointer to nothing.
 
-With Code In you can put **every byte** of your collection on Solana — the image and the metadata JSON — and serve them to wallets and marketplaces through an [IQ Gateway](https://github.com/IQCoreTeam/iq-gateway). No IPFS, no Arweave, no pinning service.
+With Code In you can put **every byte** of your collection on Solana, the image and the metadata JSON alike, and serve them to wallets and marketplaces through an [IQ Gateway](https://github.com/IQCoreTeam/iq-gateway). No IPFS, no Arweave, no pinning service.
 
 This guide walks through the full flow for a [Metaplex Candy Machine](https://developers.metaplex.com/core-candy-machine) collection.
 
@@ -37,7 +37,7 @@ Per NFT:
 2. Build the Metaplex metadata JSON with that URL in the `image` field, then inscribe the JSON itself → a second signature. Its URL is `https://<gateway>/data/{sig}` (raw bytes; `/meta/{sig}.json` serves a Metaplex-wrapped view).
 3. Register the gateway URL as the item `uri` in your Candy Machine config lines.
 
-The NFT's entire content chain — mint → uri → JSON → image — now resolves from Solana data.
+The NFT's entire content chain (mint → uri → JSON → image) now resolves from Solana data.
 
 ## Why a gateway at all?
 
@@ -49,11 +49,11 @@ Why this is still a decentralized setup:
 
 - **The gateway holds no data of its own.** Every byte is recoverable from Solana. The gateway is a cache, not a source of truth.
 - **Anyone can run one.** The gateway is open source. If one instance dies, anyone can spin up another from the public repo and serve the exact same data.
-- The only trust surface is the domain name in the `uri` — the same trade-off every IPFS-gateway-based collection already makes, with a strictly better recovery story.
+- The only trust surface is the domain name in the `uri`. This is the same trade-off every IPFS-gateway-based collection already makes, with a strictly better recovery story.
 
 ### If your gateway goes down
 
-Your NFTs do not break — the URLs in the minted metadata are just one door to data that lives on-chain. Every gateway addresses content the same way: `{gatewayBase}/img/{sig}.png`, `{gatewayBase}/data/{sig}`. The signature is the identity; the domain is interchangeable.
+Your NFTs do not break. The URLs in the minted metadata are just one door to data that lives on-chain. Every gateway addresses content the same way: `{gatewayBase}/img/{sig}.png`, `{gatewayBase}/data/{sig}`. The signature is the identity; the domain is interchangeable.
 
 So to recover, take **any working gateway** (your own new instance, or someone else's), cut the path off the stored URL, and re-attach it to the new base:
 
@@ -65,20 +65,20 @@ const sig = storedUri.split('/').pop();          // "5Xg7abc..."
 const uri = `https://gw.alive.xyz/data/${sig}`;  // same bytes, different door
 ```
 
-Your frontend can even do this automatically — keep a small list of gateway bases and fall back to the next one when a fetch fails. The new gateway reconstructs identical content from the chain, because the chain is the source of truth.
+Your frontend can even do this automatically: keep a small list of gateway bases and fall back to the next one when a fetch fails. The new gateway reconstructs identical content from the chain, because the chain is the source of truth.
 
 ## Step-by-step
 
 ### 1. Install the SDK
 
-The SDK is published on npm — install it, do not vendor or clone it:
+The SDK is published on npm. Install it, do not vendor or clone it:
 
 ```bash
 npm i @iqlabs-official/solana-sdk
 ```
 
 <Note>
-Use the high-level API only: `iqlabs.writer.codeIn()` to inscribe and `iqlabs.reader.readCodeIn()` to verify. Do not reimplement chunking or session logic with the low-level instruction builders — `codeIn()` already picks the optimal storage path by size (&lt; 900 B inline, &lt; 8.5 KB linked-list, ≥ 8.5 KB parallel session upload) and handles the fee accounts.
+Use the high-level API only: `iqlabs.writer.codeIn()` to inscribe and `iqlabs.reader.readCodeIn()` to verify. Do not reimplement chunking or session logic with the low-level instruction builders. `codeIn()` already picks the optimal storage path by size (&lt; 900 B inline, &lt; 8.5 KB linked-list, ≥ 8.5 KB parallel session upload) and handles the fee accounts.
 </Note>
 
 ### 2. Inscribe the image and the metadata
@@ -115,11 +115,11 @@ const sigB = await iqlabs.writer.codeIn(
 const uri = `${GATEWAY}/data/${sigB}`;
 ```
 
-Loop this over your collection — a batch script over a few hundred assets is about 50 lines.
+Loop this over your collection. A batch script over a few hundred assets is about 50 lines.
 
 ### 3. Register the URIs in your Candy Machine
 
-Insert each `uri` into the Candy Machine config lines as usual (`addConfigLines` with mpl-core-candy-machine, or your deploy tooling). Nothing about the Candy Machine setup changes — it just points at gateway URLs instead of IPFS/Arweave ones.
+Insert each `uri` into the Candy Machine config lines as usual (`addConfigLines` with mpl-core-candy-machine, or your deploy tooling). Nothing about the Candy Machine setup changes. It just points at gateway URLs instead of IPFS/Arweave ones.
 
 ### 4. Run your own gateway
 
@@ -152,16 +152,16 @@ Test the full loop on devnet first (`SOLANA_CLUSTER=devnet`): inscribe a few ass
 
 Two components, both in SOL:
 
-**Inscription cost (network fees).** Data is chunked at 850 bytes per transaction, each paying the 5,000-lamport base fee — roughly **0.006 SOL per MB** of payload. Binary data is base64-encoded (+33%), so budget about **0.008 SOL per MB** of raw image, plus priority fees when the network is busy.
+**Inscription cost (network fees).** Data is chunked at 850 bytes per transaction, each paying the 5,000-lamport base fee, roughly **0.006 SOL per MB** of payload. Binary data is base64-encoded (+33%), so budget about **0.008 SOL per MB** of raw image, plus priority fees when the network is busy.
 
-**Protocol fee.** Each `codeIn()` finalize sends a small size-dependent fee to the protocol, handled on-chain — observed at roughly **0.001–0.005 SOL per upload** on mainnet.
+**Protocol fee.** Each `codeIn()` finalize sends a small size-dependent fee to the protocol, handled on-chain, observed at roughly **0.001 to 0.005 SOL per upload** on mainnet.
 
 Illustrative total for a 777-piece PFP collection at ~150 KB per image plus ~1 KB of JSON:
 
 | Component | Rough cost |
 |---|---|
-| 777 images (~117 MB raw, base64 ~155 MB) — network fees | ~1 SOL |
-| 777 metadata JSONs — network fees | ~0.01 SOL |
-| Protocol fee, 1,554 uploads | ~2–8 SOL |
+| 777 images (~117 MB raw, base64 ~155 MB), network fees | ~1 SOL |
+| 777 metadata JSONs, network fees | ~0.01 SOL |
+| Protocol fee, 1,554 uploads | ~2 to 8 SOL |
 
 A one-time cost for a collection that never needs a pinning service, never expires, and can be served by any gateway anyone ever runs.
