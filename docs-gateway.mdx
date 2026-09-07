@@ -1,0 +1,527 @@
+---
+title: "IQ Gateway"
+description: "Read-only HTTP cache for IQ Labs on-chain data. Use the public one, or run your own."
+---
+
+<Note>
+The gateway turns on-chain IQ Labs data into plain HTTP. Point a browser, a
+`curl`, or a `fetch()` at it and you get JSON, images, or rendered HTML back,
+with no RPC key and no SDK install. Everything it serves lives on chain, so any
+gateway can serve the same bytes.
+</Note>
+
+## The public gateway
+
+```bash
+curl https://gateway.iqlabs.dev/health
+# {"status":"ok","mode":"multi","chains":["solana","sepolia","monad","monadTestnet"], ... }
+```
+
+| Surface | URL |
+|---|---|
+| Base URL | `https://gateway.iqlabs.dev` |
+| Interactive API docs (Swagger UI) | [gateway.iqlabs.dev/docs](https://gateway.iqlabs.dev/docs) |
+| Machine-readable schema | [gateway.iqlabs.dev/openapi.json](https://gateway.iqlabs.dev/openapi.json) |
+| Source | [github.com/IQCoreTeam/iq-gateway](https://github.com/IQCoreTeam/iq-gateway) |
+
+A first real read, no auth, no setup:
+
+```bash
+curl "https://gateway.iqlabs.dev/table/D6QsMdsHUsTTyGL74WdtLfjwNyr6bT1d3hVSrxERCa61/rows?limit=1"
+```
+
+```json
+{
+  "tablePda": "D6QsMdsHUsTTyGL74WdtLfjwNyr6bT1d3hVSrxERCa61",
+  "rows": [
+    {
+      "name": "gb-saves",
+      "description": "Game Boy save files",
+      "owner": "FidApgTYLEVyQjMjBYQeB8HJ7FTdC5myYHQLz4CziSGb",
+      "timestamp": 1777067749915,
+      "isPublic": true,
+      "__txSignature": "zdksWsWkMbtWRS9rCGts45cSokSajwQB6v2GFDuoPE413ZVR2EzCvGbYPfMH5yAEMU6Pf3VDBR2hazo5LEr2Q8R",
+      "__signer": "FidApgTYLEVyQjMjBYQeB8HJ7FTdC5myYHQLz4CziSGb",
+      "__blockTime": 1777067761
+    }
+  ],
+  "count": 1,
+  "nextCursor": "zdksWsWkMbtWRS9rCGts45cSokSajwQB6v2GFDuoPE413ZVR2EzCvGbYPfMH5yAEMU6Pf3VDBR2hazo5LEr2Q8R",
+  "cached": false
+}
+```
+
+Every row carries three gateway-stamped fields: `__txSignature` (the tx that
+wrote it), `__signer` (fee payer), and `__blockTime` (chain-truth timestamp).
+
+### Why run your own
+
+- **No single point of failure.** If one gateway is down, spin up another or
+  point at a peer.
+- **Your own cache, your own region.** Faster reads for your users.
+- **Nothing to lose.** All data is on chain, so a wiped cache just refills.
+- **No lock-in.** Same URL shapes everywhere, so switching operators is a
+  base-URL change.
+
+---
+
+## Run your own
+
+<Note>
+The gateway runs on [Bun](https://bun.sh). It is read-only by design: it never
+writes to chain and exposes no write API, so a public deployment cannot be
+made to spend or mutate anything.
+</Note>
+
+### Local in four commands
+
+```bash
+git clone https://github.com/IQCoreTeam/iq-gateway.git
+cd iq-gateway
+bun install
+cp .env.example .env
+```
+
+Minimum `.env` for Solana mainnet:
+
+```bash
+SOLANA_CLUSTER=mainnet-beta
+SOLANA_RPC_ENDPOINT=https://api.mainnet-beta.solana.com
+PORT=3000
+```
+
+Start it:
+
+```bash
+bun run dev     # watch mode
+bun run start   # plain run
+```
+
+Your gateway is live at `http://localhost:3000`, with Swagger UI at
+`http://localhost:3000/docs`. Confirm it is up:
+
+```bash
+curl http://localhost:3000/health
+curl http://localhost:3000/version
+```
+
+### Boot modes
+
+`IQ_CHAIN` picks how the process boots. Leave it unset for the default
+multi-chain mode, which is what `gateway.iqlabs.dev` runs.
+
+| `IQ_CHAIN` | Mode | Behavior |
+|---|---|---|
+| unset or `multi` | Multi-chain (default) | One process serves Solana and every configured EVM network. Chain is picked per request. |
+| `solana` | Locked Solana | Single cluster. Validates the RPC genesis hash at boot and exits on mismatch. |
+| `evm` | Locked EVM | Single EVM network. Validates the RPC chain ID at boot and exits on mismatch. |
+
+Locked modes exist for fault isolation: one bad RPC cannot affect a chain it
+was never wired to. Multi mode exists so one host can answer for everything.
+
+### Configuration
+
+**Shared**
+
+| Variable | Required | Description |
+|---|---|---|
+| `IQ_CHAIN` | No | `multi` (default), `solana`, or `evm`. Selects the boot mode above. |
+| `PORT` | No | Server port. Default `3000`. |
+| `CACHE_DIR` | No | Disk cache location. Default `./cache` (`/app/cache` in the container). |
+| `MAX_CACHE_SIZE` | No | Disk cache ceiling before cleanup. Default `10GB`. |
+| `ADMIN_TOKEN` | No | Bearer token. When set, mounts the `/admin/*` routes; when unset they do not exist at all. |
+
+**Solana**
+
+| Variable | Required | Description |
+|---|---|---|
+| `SOLANA_CLUSTER` | Yes | `mainnet-beta`, `devnet`, or `testnet`. |
+| `SOLANA_RPC_ENDPOINT` | Yes | Solana RPC URL. Must match the cluster. |
+| `HELIUS_API_KEY` | No | Enables faster reads. See [Helius](#helius-optional-but-fast). |
+| `HELIUS_API_KEYS` | No | Comma-separated keys for 429 fallback. Overrides `HELIUS_API_KEY`. |
+| `BACKFILL_FROM_SLOT` | No | Pre-cache history from this slot on boot. `398615411` is the first IQ Labs tx. Needs a paid Helius plan. |
+
+**EVM**
+
+| Variable | Required | Description |
+|---|---|---|
+| `IQETH_NETWORK` | Yes in `evm` mode | `sepolia`, `monad`, or `monadTestnet`. |
+| `IQETH_RPC_ENDPOINT` | Yes in `evm` mode | EVM JSON-RPC URL. Chain ID is validated at boot. |
+| `IQETH_DEFAULT_NETWORK` | No | In multi mode, which network a bare `0x` id resolves to. Default `sepolia`. |
+| `ALCHEMY_API_KEY` | No | Batched reads and higher rate limits. |
+| `ENS_RPC_ENDPOINT` | No | Ethereum mainnet RPC used only for ENS. Default `https://eth.llamarpc.com`. |
+| `KNOWN_DBROOTS_FILE` | No | Seed list for `/dbroots` discovery. Default `./config/known-dbroots.json`. |
+
+**EVM networks**
+
+| Network | Chain ID | Contract |
+|---|---|---|
+| `sepolia` | 11155111 | `0x246A08D9fdD9b3990A88eD1f2DF1A87239839F07` |
+| `monad` | 143 | `0x7ae06f87Cf93606DA2BD6A281afB28028cAE233D` |
+| `monadTestnet` | 10143 | `0x3379883538C068978e199472b5D127055c734867` |
+
+### Deploy with Docker
+
+The repo ships a chain-agnostic `Dockerfile`. Build once, configure with env.
+
+```bash
+docker build -t iq-gateway .
+
+docker run -d \
+  -p 3000:3000 \
+  -v iq-cache:/app/cache \
+  --env-file .env \
+  --restart unless-stopped \
+  iq-gateway
+```
+
+That is the entire deployment contract:
+
+| Requirement | Detail |
+|---|---|
+| Port | Listens on `PORT`, default `3000`. Plain HTTP. |
+| Env | The vars above, injected however your platform does secrets. |
+| Volume | Durable storage mounted at `CACHE_DIR` (`/app/cache`). Survives restarts, safe to wipe. |
+| TLS and routing | Terminate TLS and route your domain at your proxy or ingress. |
+
+Bare VPS, Compose, Kubernetes, Akash: all fine. The gateway does not care.
+
+<Warning>
+Mount the cache on storage whose lifecycle is independent of the container
+(retain on delete). A redeploy that only swaps the image should keep the same
+volume, otherwise every restart refetches from chain.
+</Warning>
+
+---
+
+## Multi-chain routing
+
+In multi mode the chain is resolved per request, so there is no `/solana/...`
+or `/monad/...` prefix to remember. Rules, in order:
+
+1. **`?network=` wins.** `solana`, `sepolia`, `monad`, or `monadTestnet`. An
+   unknown value returns `400`.
+2. **Otherwise the id shape decides.** A base58 id (Solana pubkey or signature)
+   goes to Solana; anything else (a `0x` hash or address, or an EVM dbRootId)
+   goes to the EVM default network.
+3. **Id-less routes** such as `/health` and `/dbroots` use the default chain
+   unless `?network=` says otherwise.
+
+```bash
+curl "https://gateway.iqlabs.dev/dbroots"                  # Solana (default)
+curl "https://gateway.iqlabs.dev/dbroots?network=monad"    # Monad
+curl "https://gateway.iqlabs.dev/dbroots?network=foo"
+# {"error":"unknown network \"foo\" (expected: solana | sepolia | monad | monadTestnet)"}
+```
+
+Identifier shapes differ per chain, so a few path segments change:
+
+| | Solana | EVM |
+|---|---|---|
+| tx identifier | `signature` (base58) | `txHash` (`0x` + 64 hex) |
+| wallet | base58 pubkey | `0x` address |
+| table key | table PDA: `/table/{pda}/...` | `/table/{dbRootId}/{tableName}/...` |
+| row tx field | `__txSignature` | `__txHash` |
+| name service | SNS, `/sns/...` | ENS, `/ens/...` |
+| site hosting | `/site/...` | not in v1 |
+
+A network that the running gateway has no RPC configured for returns `503`
+instead of guessing.
+
+---
+
+## Endpoints
+
+The live `/openapi.json` is always the source of truth for the gateway you are
+talking to. This is the working set.
+
+### Assets and metadata
+
+| Endpoint | Description |
+|---|---|
+| `GET /data/{sig}` | Raw asset data plus metadata for an inscription. |
+| `GET /meta/{sig}.json` | Metaplex-compatible NFT metadata. |
+| `GET /img/{sig}.png` | Raw image or file bytes. |
+| `GET /view/{sig}` | HTML render of a text inscription. |
+| `GET /render/{sig}` | PNG or SVG render of a text inscription. |
+
+### Tables (the on-chain database)
+
+| Endpoint | Description |
+|---|---|
+| `GET /table/{pda}/rows` | Paginated rows. `limit` (max 100, default 50), `before` (cursor = last sig of the previous page), `fresh=1` to bypass cache. Honors `If-None-Match` and answers `304`. |
+| `GET /table/{pda}/index` | Full signature index, up to 10000 sigs. |
+| `GET /table/{pda}/slice` | Specific rows by signature. `sigs` is a comma-separated list, max 50. |
+| `GET /table/{pda}/meta` | Decoded table metadata: name, columns, `lastTimestamp`, gate config. |
+| `GET /table/{feedPda}/thread/{threadPda}` | Resolved thread in one call: `{op, replies, totalReplies}`, with the OP picked server-side. |
+| `GET /table/dbroot` | DbRoot info: table seeds, creators, names. |
+| `POST /table/{pda}/notify` | Warm the cache for a tx you just sent, and push it to SSE subscribers. |
+| `GET /table/{pda}/subscribe` | Server-Sent Events stream of new rows. |
+
+Pagination is cursor-based, not offset-based:
+
+```bash
+# page 1
+curl "https://gateway.iqlabs.dev/table/{pda}/rows?limit=50"
+# page 2: feed nextCursor back as before
+curl "https://gateway.iqlabs.dev/table/{pda}/rows?limit=50&before=<nextCursor>"
+```
+
+### Users
+
+| Endpoint | Description |
+|---|---|
+| `GET /user/{pubkey}/assets` | Assets uploaded by a wallet. `limit` (max 100, default 20), `before`. |
+| `GET /user/{pubkey}/sessions` | Session accounts. |
+| `GET /user/{pubkey}/profile` | Parsed profile JSON. |
+| `GET /user/{pubkey}/state` | Raw on-chain user state. |
+| `GET /user/{pubkey}/connections` | User connections. |
+| `GET /user/{pubkey}/posts` | Signatures this wallet authored. Opportunistic index: coverage grows as the gateway serves traffic. |
+
+### Gate verification
+
+| Endpoint | Description |
+|---|---|
+| `GET /gate/{tablePda}/check/{wallet}` | Server-side token-gate check. Returns `{sol, gate, tokenBalance, meetsGate, minSol}`, cached 30s. Replaces a client-side `getBalance` plus `getAccount` pair. |
+
+### Discovery and search
+
+| Endpoint | Description |
+|---|---|
+| `GET /dbroots` | Every DbRoot the IQ Labs program owns, one row per dApp, with pre-derived table PDAs. Cached 30 min. |
+| `GET /search` | Full-text search over the cached catalog. `q`, `kind` (`dbroot`, `table`, `row`), `network`, `limit`. Never 4xxs on shape, so it is safe to call on every keystroke. |
+| `GET /search/stats` | Index size, broken down by kind and network. |
+
+```bash
+curl "https://gateway.iqlabs.dev/search?q=iq-git&kind=table&limit=5"
+curl "https://gateway.iqlabs.dev/search/stats"
+# {"total":1038,"byKind":{"dbroot":32,"row":778,"table":228}, ... }
+```
+
+### Name services
+
+| Endpoint | Chain | Description |
+|---|---|---|
+| `GET /sns/{domain}` | Solana | `{domain, owner, record}` for a `.sol` name. `?fresh=1` skips the 24h cache. |
+| `GET /sns/{domain}/record` | Solana | Resolves the URL record and `302`s to the on-chain manifest. |
+| `GET /sns/{domain}/record/{path}` | Solana | Same, redirecting to a sub-path of the manifest. |
+| `GET /ens/{name}` | EVM | Forward resolve to `{name, address}`. Passing an address reverse-resolves instead. |
+| `GET /ens/{addr}/reverse` | EVM | Reverse resolve to the primary ENS name. |
+
+ENS uses a dedicated Ethereum mainnet RPC (`ENS_RPC_ENDPOINT`) and is cached
+30 min. SNS lookups are cached 5 min, positive and negative both, and
+concurrent cold lookups for one domain collapse into a single RPC call.
+
+### System
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` | Status, active chains, cache stats. In locked modes it also reports RPC metrics and per-cache sizes. |
+| `GET /version` | Gateway version. |
+| `GET /` | Terminal-styled homepage with live stats. |
+| `GET /docs` | Swagger UI, served from gateway-hosted assets. |
+| `GET /openapi.json` | OpenAPI 3.0 schema for the active chain set. |
+
+### Admin (operators only)
+
+Mounted only when `ADMIN_TOKEN` is set. Bearer auth.
+
+```bash
+curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:3000/admin/queue
+
+curl -X POST http://localhost:3000/admin/queue \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"concurrency": 8, "minTimeMs": 50, "maxDepth": 500}'
+```
+
+`GET /admin/queue` returns RPC queue stats; `POST` patches `concurrency`,
+`minTimeMs`, and `maxDepth` at runtime. No restart needed.
+
+---
+
+## Live updates without polling
+
+Two endpoints turn the gateway into a push channel for a table.
+
+**Subscribe** from the client:
+
+```js
+const es = new EventSource(
+  `https://gateway.iqlabs.dev/table/${tablePda}/subscribe`
+);
+
+es.addEventListener("hello", () => console.log("connected"));
+es.addEventListener("row", (e) => render(JSON.parse(e.data)));
+```
+
+The stream emits `hello` on connect, `row` on every notify for that table, and
+`ping` every 30s to keep proxies from closing the connection.
+
+**Notify** right after you write a tx, so readers see it before the RPC has
+even indexed the signature:
+
+```bash
+curl -X POST "https://gateway.iqlabs.dev/table/{pda}/notify" \
+  -H "content-type: application/json" \
+  -d '{"txSignature": "<sig>", "signer": "<pubkey>", "row": { "...": "optional row data" }}'
+```
+
+Only `txSignature` is required. Including `row` lets the gateway skip the
+chain read and inject your row immediately; including `signer` also drops that
+wallet's cached asset list so their next `/user/.../assets` call is fresh. If
+the row cannot be fetched, the gateway invalidates the cached pages instead, so
+the next read is correct either way.
+
+---
+
+## Caching
+
+Three tiers, with the chain as the floor:
+
+| Layer | TTL | Purpose |
+|---|---|---|
+| Memory (LRU) | 60s head pages, 5 min other | Hot reads |
+| Disk (SQLite) | 5 min rows, 24h immutable entries | Survives restarts |
+| Chain | permanent | Source of truth |
+
+Individual rows are immutable once written, so they cache for 24 hours. Head
+pages cache for 60 seconds with a throttled background refresh, gated on the
+table account's `lastTimestamp`: if the timestamp has not moved, the gateway
+keeps serving the cached page instead of rescanning signatures.
+
+Use `If-None-Match` on `/table/{pda}/rows` to get `304 Not Modified` and skip
+the body entirely.
+
+### Bootstrap from a peer
+
+A cold gateway can inherit a hot one's cache instead of refetching everything
+from chain. The snapshot is a streamed `tar.gz` of `cache.db` plus blobs, made
+consistent with `VACUUM INTO`.
+
+```bash
+# warm a cold gateway from a peer
+./scripts/bootstrap-cache-from-peer.sh https://gateway.iqlabs.dev ./cache
+
+# or inline
+curl -sS https://gateway.iqlabs.dev/cache/snapshot | tar -xz -C ./cache
+```
+
+| Endpoint | Description |
+|---|---|
+| `GET /cache/info` | Entry count, total size, by-type breakdown. |
+| `GET /cache/entries` | Paginated disk-cache index. `type`, indexed `q` (3 to 256 chars), `limit` (max 500), opaque `cursor`. |
+| `GET /cache/entries/{id}` | One entry with a bounded decoded preview. |
+| `GET /cache/blob/{id}` | Raw cached bytes for an entry. |
+| `GET /cache/memory` | Process-local memory-cache counts and keys, with optional bounded previews. |
+| `GET /cache/snapshot` | Streamed `tar.gz` of the whole cache. Public read. |
+
+<Note>
+There is deliberately no `POST /cache/restore` or peer-sync endpoint. Operators
+write to their own cache directory as a local filesystem operation; nobody
+writes across the network. That is what keeps a public gateway read-only.
+</Note>
+
+### Helius (optional, but fast)
+
+With a paid Helius plan on `HELIUS_API_KEY`, the Solana path automatically
+uses `getTransactionsForAddress` (100 full txs per call, roughly 100x faster
+for session files), batched JSON-RPC for row reads, and startup backfill when
+`BACKFILL_FROM_SLOT` is set. Without it everything still works on plain RPC,
+just slower for large files.
+
+---
+
+## Hosting a site on Solana
+
+Solana-only. The gateway serves any file from an on-chain manifest, so a
+static site can live entirely on chain.
+
+| Endpoint | Description |
+|---|---|
+| `GET /site/{manifestSig}` | Serve the manifest's index file. |
+| `GET /site/{manifestSig}/{path}` | Serve any file from the manifest. |
+| `GET /site/{manifestSig}/manifest` | The normalized manifest as JSON: `{manifestSig, indexPath, files}`. |
+
+Both Iqoogle and gateway manifest formats are supported, with SPA fallback for
+unknown paths and root-relative asset resolution.
+
+Deploy a directory:
+
+```bash
+bun run scripts/deploy-site.ts ./my-site ./keypair.json
+```
+
+### Point a `.sol` domain at it
+
+On your `.sol` domain via [sns.id](https://www.sns.id), set one record:
+
+```
+Record.URL = https://gateway.iqlabs.dev/site/<your-sig>/<your-index-file>
+```
+
+That single record lights up three surfaces at once, because the SNS
+web-resolution spec checks `URL` first:
+
+| URL | How it resolves |
+|---|---|
+| `gateway.iqlabs.dev/sns/<name>/record` | Gateway reads the record, `302`s to the manifest. |
+| `<name>.sol` in Brave | Brave's native SNS resolver follows the URL record. |
+| `<name>.sol.site/<file>` | Needs one extra CNAME, below. |
+
+<Warning>
+Include the file path in the record, not just the signature. Many manifests use
+a non-standard index (`gameboy.html`, not `index.html`), and the gateway uses
+the path you bake in as the default file when someone visits with no path.
+</Warning>
+
+For the prettier `<name>.sol.site` URL, also set a CNAME through the
+"Configure Sol.site" UI on sns.id:
+
+```
+Record.CNAME = sns.iqlabs.dev
+```
+
+`sns.iqlabs.dev` is a direct A record to the gateway origin with no CDN proxy
+in front. If the origin IP ever changes, that one A record is updated and every
+CNAME user keeps working.
+
+Test it:
+
+```bash
+curl -L https://gateway.iqlabs.dev/sns/<your-name>/record   # works immediately
+curl -L https://<your-name>.sol.site/                       # after DNS propagates
+```
+
+The URL record format is operator-agnostic, so a domain can point at any
+gateway. The regex extracts the signature from whichever gateway URL was set,
+and the on-chain content is identical either way. Pick the operator you trust.
+
+---
+
+## How it fits together
+
+```
+src/chain/
+  types.ts     ChainReader interface, the shared seam
+  solana/      web3.js + Helius + SNS
+  evm/         ethers + Alchemy + ENS
+src/routes/
+  *.ts         Solana route set
+  evm/         EVM route set
+src/cache/     shared SQLite store, LRU, dedup, FTS catalog
+src/resolver.ts  per-request chain resolution (multi mode)
+src/server.ts    boots one of the three modes
+```
+
+The only real divergence between chains lives in `src/chain/`. Cache, RPC
+queue, ETag handling, SSE, search, and the server shell are shared. Importing
+the inactive adapter is side-effect-free, so a misconfigured EVM env can never
+take down a Solana-only gateway.
+
+<Note>
+Read-heavy tooling in the IQ Labs stack already routes through gateways by
+default with raw RPC as the final fallback. See the
+[on-chain Git CLI](/docs-iqgit#gateway-routing) for how the `GATEWAY_URL`
+fallback chain works, including pointing it at your own instance.
+</Note>

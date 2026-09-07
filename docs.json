@@ -41,6 +41,10 @@
       {
         "group": "Robinhood Chain",
         "pages": ["docs-robinhood"]
+      },
+      {
+        "group": "Gateway",
+        "pages": ["docs-gateway"]
       }
     ],
     "global": {
