@@ -14,7 +14,7 @@ gateway can serve the same bytes.
 
 ```bash
 curl https://gateway.iqlabs.dev/health
-# {"status":"ok","mode":"multi","chains":["solana","sepolia","monad","monadTestnet"], ... }
+# {"status":"ok","mode":"multi","chains":["solana","sepolia","monad","monadTestnet","robinhood"], ... }
 ```
 
 | Surface | URL |
@@ -145,9 +145,12 @@ was never wired to. Multi mode exists so one host can answer for everything.
 
 | Variable | Required | Description |
 |---|---|---|
-| `IQETH_NETWORK` | Yes in `evm` mode | `sepolia`, `monad`, or `monadTestnet`. |
+| `IQETH_NETWORK` | Yes in `evm` mode | `sepolia`, `monad`, `monadTestnet`, or `robinhood`. |
 | `IQETH_RPC_ENDPOINT` | Yes in `evm` mode | EVM JSON-RPC URL. Chain ID is validated at boot. |
+| `IQETH_RPC_<NET>` | No | Per-network RPC override in multi mode, for example `IQETH_RPC_MONAD` or `IQETH_RPC_ROBINHOOD`. Falls back to `IQETH_RPC_ENDPOINT`, then the network's built-in default. |
 | `IQETH_DEFAULT_NETWORK` | No | In multi mode, which network a bare `0x` id resolves to. Default `sepolia`. |
+| `IQETH_DEPLOY_BLOCK_<NET>` | No | Contract deploy block per network, for example `IQETH_DEPLOY_BLOCK_ROBINHOOD`. Lets the [row index backfill](#durable-evm-row-index) skip empty history instead of scanning from block 0. |
+| `IQETH_LOGS_SPAN` | No | Starting `eth_getLogs` block span for backfill scans. Default `50000`; halves automatically when an RPC rejects the range. |
 | `ALCHEMY_API_KEY` | No | Batched reads and higher rate limits. |
 | `ENS_RPC_ENDPOINT` | No | Ethereum mainnet RPC used only for ENS. Default `https://eth.llamarpc.com`. |
 | `KNOWN_DBROOTS_FILE` | No | Seed list for `/dbroots` discovery. Default `./config/known-dbroots.json`. |
@@ -159,6 +162,7 @@ was never wired to. Multi mode exists so one host can answer for everything.
 | `sepolia` | 11155111 | `0x246A08D9fdD9b3990A88eD1f2DF1A87239839F07` |
 | `monad` | 143 | `0x7ae06f87Cf93606DA2BD6A281afB28028cAE233D` |
 | `monadTestnet` | 10143 | `0x3379883538C068978e199472b5D127055c734867` |
+| `robinhood` | 4663 | `0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223` |
 
 ### Deploy with Docker
 
@@ -199,8 +203,8 @@ volume, otherwise every restart refetches from chain.
 In multi mode the chain is resolved per request, so there is no `/solana/...`
 or `/monad/...` prefix to remember. Rules, in order:
 
-1. **`?network=` wins.** `solana`, `sepolia`, `monad`, or `monadTestnet`. An
-   unknown value returns `400`.
+1. **`?network=` wins.** `solana`, `sepolia`, `monad`, `monadTestnet`, or
+   `robinhood`. An unknown value returns `400`.
 2. **Otherwise the id shape decides.** A base58 id (Solana pubkey or signature)
    goes to Solana; anything else (a `0x` hash or address, or an EVM dbRootId)
    goes to the EVM default network.
@@ -211,7 +215,7 @@ or `/monad/...` prefix to remember. Rules, in order:
 curl "https://gateway.iqlabs.dev/dbroots"                  # Solana (default)
 curl "https://gateway.iqlabs.dev/dbroots?network=monad"    # Monad
 curl "https://gateway.iqlabs.dev/dbroots?network=foo"
-# {"error":"unknown network \"foo\" (expected: solana | sepolia | monad | monadTestnet)"}
+# {"error":"unknown network \"foo\" (expected: solana | sepolia | monad | monadTestnet | robinhood)"}
 ```
 
 Identifier shapes differ per chain, so a few path segments change:
@@ -392,6 +396,41 @@ keeps serving the cached page instead of rescanning signatures.
 
 Use `If-None-Match` on `/table/{pda}/rows` to get `304 Not Modified` and skip
 the body entirely.
+
+### Durable EVM row index
+
+On Solana, enumerating a table's rows is one `getSignaturesForAddress` call:
+the RPC keeps a per-account transaction index for free. EVM chains have no
+equivalent, so the SDK walks `beforeDataTx` pointers one transaction at a
+time. That walk is strictly sequential, is redone on every cold cache, and
+silently loses rows when two wallets write the same table at once (the
+two-transaction `writeRow` can orphan the loser's row off the pointer chain).
+
+The gateway fixes this with a durable index in `cache.db` that, unlike the
+LRU tiers above, is never pruned: once a transaction is known to belong to a
+table, that fact is chain-truth and is kept forever.
+
+| Table | Contents |
+|---|---|
+| `evm_row_index` | One row per row-write tx, keyed by `(network, dbroot, table, txHash)`, with block number, block time, signer, and the hydrated row payload. |
+| `evm_index_state` | Backfill progress per table: the block range scanned so far and whether the scan reached the deploy block. |
+
+Three sources feed it:
+
+1. **Live reads.** Every row served through the walk path is recorded as a
+   side effect.
+2. **`POST /table/.../notify`.** Posting clients inject their own writes,
+   which land in the index immediately.
+3. **Log backfill.** The contract emits `DbCodeInEvent` with the dbRoot and
+   table ids as indexed topics, so a filtered `eth_getLogs` scan enumerates
+   every row-write for one table in block order, including rows the pointer
+   walk can never reach. Scans run at background RPC priority, persist
+   progress, and resume where they left off.
+
+Once a table's backfill is complete, deep `before` cursors are answered
+straight from SQLite instead of re-walking the chain past the cursor, and
+row payloads missing from the index are hydrated in parallel. Index size is
+visible at `/table/cache/stats` under `rowIndex`.
 
 ### Bootstrap from a peer
 

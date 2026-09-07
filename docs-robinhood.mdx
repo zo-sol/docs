@@ -20,7 +20,7 @@ This document is in progress and will be refined.
 **Robinhood Chain mainnet** is live and supported. Switch with [`setNetwork('robinhood')`](#setnetwork). Requires SDK **v0.3.0 or later**. The Robinhood Chain testnet contract is not deployed yet.
 </Warning>
 
-The IQLabs Ethereum SDK works on Robinhood Chain out of the box. Same API, one line to switch networks. Store data on-chain, build databases, send encrypted DMs, gate content by token ownership. Robinhood Chain is an Ethereum-compatible Layer 2 with ETH as the gas token, so fees stay a fraction of a cent while everything behaves exactly like Ethereum.
+The IQLabs Ethereum SDK works on Robinhood Chain out of the box. Same API, one line to switch networks. Store data on-chain, build databases, send encrypted DMs, gate content by token ownership. Robinhood Chain is an Ethereum-compatible Layer 2 with ETH as the gas token: gas stays a fraction of a cent, a basic write adds a `0.00012 ETH` protocol fee (about $0.22), and everything behaves exactly like Ethereum.
 
 ## Installation
 
@@ -40,6 +40,7 @@ The SDK ships with four network modes. Set the one you want once at app startup 
 |------|---------:|----------|----------|-------------|
 | `sepolia` | 11155111 | ETH | [`0x246A08D9fdD9b3990A88eD1f2DF1A87239839F07`](https://sepolia.etherscan.io/address/0x246A08D9fdD9b3990A88eD1f2DF1A87239839F07) | `https://rpc.sepolia.org` |
 | `monad`   | 143      | MON | [`0x7ae06f87Cf93606DA2BD6A281afB28028cAE233D`](https://monadvision.com/address/0x7ae06f87Cf93606DA2BD6A281afB28028cAE233D) | `https://rpc.monad.xyz` |
+| `monadTestnet` | 10143 | MON | [`0x3379883538C068978e199472b5D127055c734867`](https://testnet.monadexplorer.com/address/0x3379883538C068978e199472b5D127055c734867) | `https://testnet-rpc.monad.xyz` |
 | `robinhood` | 4663   | ETH | [`0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223`](https://robinhoodchain.blockscout.com/address/0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223) | `https://rpc.mainnet.chain.robinhood.com` |
 
 ```typescript
@@ -56,14 +57,14 @@ The contract is identical across all networks (same ABI, same functions). Only t
 
 ## Getting ETH on Robinhood Chain
 
-Robinhood Chain uses **ETH** for gas and fees. Bridge ETH (or supported ERC-20s) in via the canonical Arbitrum bridge or partner bridging routes — see the [official Robinhood Chain docs](https://docs.robinhood.com/chain/) for current options.
+Robinhood Chain uses **ETH** for gas and fees. Bridge ETH (or supported ERC-20s) in via the canonical Arbitrum bridge or partner bridging routes. See the [official Robinhood Chain docs](https://docs.robinhood.com/chain/) for current options.
 
 <Note>
 Fees are tiny: a basic write costs `0.00012 ETH` (about $0.22). Bridging a few dollars of ETH is enough for many writes.
 </Note>
 
 <Warning>
-Robinhood Chain is chain ID `4663`. It is a separate network from Ethereum mainnet and Arbitrum One — ETH must be bridged in before it can be spent there.
+Robinhood Chain is chain ID `4663`. It is a separate network from Ethereum mainnet and Arbitrum One, so ETH must be bridged in before it can be spent there.
 </Warning>
 
 ---
@@ -103,7 +104,7 @@ await provider.send('eth_requestAccounts', []);
 const signer = await provider.getSigner();
 ```
 
-Reader functions don't need a signer they use the RPC configured via [`setRpcUrl()`](#setrpcurl).
+Reader functions don't need a signer; they use the RPC configured via [`setRpcUrl()`](#setrpcurl).
 
 <Note>
 Use [`assertChainMatches(signer)`](#assertchainmatches) after `setNetwork('robinhood')` to catch a signer that's still pointed at the wrong chain before you send a transaction.
@@ -485,7 +486,7 @@ await iqlabs.writer.manageTableCreators(
 
 #### `createTable()`
 
-Create a new table. Charges `tableCreationFee` (0.00036 ETH by default — or whatever value the DbRoot creator pinned with `setRootTableCreationFee`). Split 31% to `feeReceiver`, 69% to `DbRoot.creator`.
+Create a new table. Charges `tableCreationFee` (0.00036 ETH by default, or whatever value the DbRoot creator pinned with `setRootTableCreationFee`). Split 31% to `feeReceiver`, 69% to `DbRoot.creator`.
 
 | **Parameters** | `signer`: `ethers.Signer`<br/>`dbRootId`: database ID (string)<br/>`tableName`: table name (string)<br/>`columns`: column names (string[])<br/>`idCol`: ID column (string)<br/>`extKeys`: extension keys (string[], default: `[]`)<br/>`gate`: optional access gate<br/>`writers`: optional writer whitelist (`string[]`, default: `[]`)<br/>`isPrivate`: create private table (boolean, default: `false`) |
 |----------------|--------------------------|
@@ -570,7 +571,7 @@ await iqlabs.writer.writeRow(signer, 'my-app', 'posts', JSON.stringify({
 Table must already exist. `writeRow` will revert if the table was never created.
 </Warning>
 
-Fires two transactions internally: `dbCodeIn` (data — **fee charged here**, basic or linkedList by payload size) + `updateTableTxChainTail` (free pointer bump).
+Fires two transactions internally: `dbCodeIn` (data, **fee charged here**, basic or linkedList by payload size) + `updateTableTxChainTail` (free pointer bump).
 
 ---
 
@@ -809,7 +810,7 @@ async function setupFortuneJar(signer: any) {
   }
 }
 
-// Submit a fortune (costs 0.00036 ETH)
+// Submit a fortune (a small inline row costs the 0.00012 ETH basic fee)
 async function submitFortune(signer: any, fortune: string) {
   iqlabs.setNetwork('robinhood');
   const author = await signer.getAddress();
