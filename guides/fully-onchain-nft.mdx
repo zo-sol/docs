@@ -152,7 +152,12 @@ Test the full loop on devnet first (`SOLANA_CLUSTER=devnet`): inscribe a few ass
 
 Two components, both in SOL:
 
-**Inscription cost (network fees).** Data is chunked at 850 bytes per transaction, each paying the 5,000-lamport base fee, roughly **0.006 SOL per MB** of payload. Binary data is base64-encoded (+33%), so budget about **0.008 SOL per MB** of raw image, plus priority fees when the network is busy.
+**Inscription cost (network fees).** Every chunk transaction pays the 5,000-lamport base fee, and the chunk size depends on the transaction profile the SDK selects:
+
+- **Legacy profile** (wallet signers): 850-byte chunks, roughly **0.006 SOL per MB** of payload.
+- **v1 profile** (keypair signers, with the transaction v1 feature gate active): 3,600-byte chunks, about 292 transactions per MB, roughly **0.0015 SOL per MB** of payload.
+
+Binary data is base64-encoded (+33%), so budget about **0.008 SOL** (legacy) or **0.002 SOL** (v1) per MB of raw image, plus priority fees when the network is busy. A batch inscription script signing with a `Keypair` gets the v1 profile automatically, cutting network fees by about 4x.
 
 **Protocol fee.** Each `codeIn()` finalize sends a small size-dependent fee to the protocol, handled on-chain, observed at roughly **0.001 to 0.005 SOL per upload** on mainnet.
 
@@ -160,8 +165,8 @@ Illustrative total for a 777-piece PFP collection at ~150 KB per image plus ~1 K
 
 | Component | Rough cost |
 |---|---|
-| 777 images (~117 MB raw, base64 ~155 MB), network fees | ~1 SOL |
+| 777 images (~117 MB raw, base64 ~155 MB), network fees | ~1 SOL (legacy) or ~0.25 SOL (v1) |
 | 777 metadata JSONs, network fees | ~0.01 SOL |
-| Protocol fee, 1,554 uploads | ~2 to 8 SOL |
+| Protocol fee, 1,554 uploads | ~2 to 8 SOL (unchanged by the transaction format) |
 
 A one-time cost for a collection that never needs a pinning service, never expires, and can be served by any gateway anyone ever runs.

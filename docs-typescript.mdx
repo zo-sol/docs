@@ -13,6 +13,12 @@ This document is in progress and will be refined.
 npm i @iqlabs-official/solana-sdk
 ```
 
+<Note>
+The current release is `0.2.0` (published 2026-09-16). It requires
+`@solana/web3.js` 1.99.0 or newer, the first web3.js release able to parse
+Solana version-1 transactions. See [Transaction v1 Support](#transaction-v1-support).
+</Note>
+
 ---
 
 ## Core Concepts
@@ -29,14 +35,72 @@ This is how you store any data (files, text, JSON) on-chain.
 
 Depending on data size, the SDK picks the optimal method:
 
-- **Small data (&lt; 900 bytes)**: store immediately, fastest
-- **Medium data (&lt; 8.5 KB)**: split into multiple transactions
-- **Large data (&gt;= 8.5 KB)**: upload in parallel for speed
+- **Small data (under the inline cap)**: stored inline in a single transaction, fastest
+- **Medium data**: split into a linked list of chunk transactions
+- **Large data**: uploaded in parallel through a session, for speed
+
+The exact size thresholds depend on the active transaction profile: the inline
+cap is 700 bytes on the legacy profile and 3,400 bytes on the v1 profile. See
+[Transaction v1 Support](#transaction-v1-support).
 
 #### Key related functions
 
 - [`codeIn()`](#codein): upload data and get a transaction ID
 - [`readCodeIn()`](#readcodein): read data back from a transaction ID
+
+---
+
+### Transaction v1 Support
+
+Solana transaction format v1 (SIMD-0296) raises the transaction size cap from
+1,232 to 4,096 bytes. The v1 feature gate is active on both mainnet and devnet,
+and SDK `0.2.0` uses it to pack roughly 4x more data into each write.
+
+#### Two transaction profiles
+
+| Profile | Chunk size | Inline cap | Used when |
+|---------|-----------|------------|-----------|
+| **legacy** | 850 bytes | 700 bytes | Wallet-adapter signers, or clusters where the v1 gate is not active |
+| **v1** | 3,600 bytes | 3,400 bytes | Keypair signers on clusters where the v1 gate is active |
+
+The SDK selects the profile at runtime, per write: it uses the v1 pipeline when
+the feature gate is active on the connected cluster **and** the signer exposes a
+raw secret key (a `Keypair`). Wallet-adapter signers (Phantom, Mobile Wallet
+Adapter) currently always use the legacy pipeline; wallet v1 signing will come
+when wallets advertise support. The routing logic (inline vs linked list vs
+session) is otherwise identical, and fees are unchanged.
+
+To force a profile, set the environment variable `IQ_TX_PROFILE=legacy` or
+`IQ_TX_PROFILE=v1` (v1 still requires a keypair signer).
+
+#### Account migration
+
+The on-chain program (`9KLLchQVJpGkw4jPuUmnvqESdR7mtNCYr3qS4iQLabs`, same id on
+mainnet and devnet) was upgraded on 2026-09-16 to raise the payload capacity
+per account to 4,096 bytes.
+
+- New users initialized after the upgrade get full-size accounts automatically.
+- Accounts created before the upgrade are smaller and are grown automatically
+  by the SDK on the next write, using the permissionless `realloc_account`
+  instruction. The writer pays the one-time rent difference, about 0.045 SOL
+  across the two accounts. No user action is required.
+
+#### Reading v1-written data
+
+All SDK readers request `maxSupportedTransactionVersion: 1`, which also returns
+legacy and v0 transactions, so previously written data keeps working. If your
+app reads transactions with its own web3.js code, upgrade to `@solana/web3.js`
+1.99.0 or newer and request version 1, or the RPC will not return v1-written
+data.
+
+Session reads now validate completeness against the on-chain session account's
+`total_chunks`: an incomplete read throws an error (`incomplete session:
+missing or unexpected chunks`) instead of silently returning truncated data.
+
+<Warning>
+SDK 0.1.28 and older cannot read v1-written data and cannot write v1
+transactions. They keep working for legacy writes and legacy-written data.
+</Warning>
 
 ---
 
@@ -260,6 +324,12 @@ const sig = await iqlabs.writer.codeIn(
 );
 ```
 
+<Note>
+`codeIn()` picks the transaction profile automatically, per write: keypair
+signers on a v1-enabled cluster use 3,600-byte chunks, wallet-adapter signers
+use legacy 850-byte chunks. See [Transaction v1 Support](#transaction-v1-support).
+</Note>
+
 ---
 
 #### `readCodeIn()`
@@ -275,6 +345,14 @@ const result = await iqlabs.reader.readCodeIn('5Xg7...');
 console.log(result.data);      // 'Hello, blockchain!'
 console.log(result.metadata);  // JSON string with file metadata
 ```
+
+<Note>
+`readCodeIn()` requests `maxSupportedTransactionVersion: 1`, so it reads data
+written through either transaction profile (legacy, v0, and v1). Session reads
+validate completeness against the session account's `total_chunks` and throw
+`incomplete session: missing or unexpected chunks` rather than returning
+truncated data.
+</Note>
 
 ---
 

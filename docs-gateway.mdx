@@ -249,6 +249,14 @@ talking to. This is the working set.
 | `GET /view/{sig}` | HTML render of a text inscription. |
 | `GET /render/{sig}` | PNG or SVG render of a text inscription. |
 
+<Note>
+The gateway reads Solana version-1 transactions: its readers request
+`maxSupportedTransactionVersion: 1`, which also returns legacy and v0
+transactions. Files written through the SDK's
+[v1 pipeline](/docs-typescript#transaction-v1-support) are served exactly like
+legacy writes, from the same URLs.
+</Note>
+
 ### Tables (the on-chain database)
 
 | Endpoint | Description |
